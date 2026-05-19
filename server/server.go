@@ -1,0 +1,192 @@
+package server
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/jackweekly/geospatial-server/store"
+)
+
+// Server is the HTTP server for the geospatial data service.
+type Server struct {
+	http.Server
+	hub               *Hub
+	minPushInterval   time.Duration
+}
+
+// NewServer creates a new HTTP server.
+func NewServer(addr string, s *store.Store, minPushInterval time.Duration) *Server {
+	hub := NewHub(s)
+	srv := &Server{
+		Server: http.Server{
+			Addr:         addr,
+			ReadTimeout:  15 * time.Second,
+			WriteTimeout: 15 * time.Second,
+		},
+		hub:             hub,
+		minPushInterval: minPushInterval,
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			w.Header().Set("Content-Type", "text/html")
+			w.Write([]byte(indexHTML))
+			return
+		}
+		http.NotFound(w, r)
+	})
+
+	mux.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
+		StreamHandler(context.Background(), w, r, hub, minPushInterval)
+	})
+
+	srv.Handler = mux
+	return srv
+}
+
+// Start starts the HTTP server.
+func (s *Server) Start() error {
+	fmt.Printf("Server listening on http://%s\n", s.Addr)
+	return s.ListenAndServe()
+}
+
+// indexHTML is the demo Leaflet.js client (defined at the end of this file).
+const indexHTML = `<!DOCTYPE html>
+<html>
+<head>
+    <title>Geospatial Server</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * { margin: 0; padding: 0; }
+        body { font-family: sans-serif; }
+        #map { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        #status { position: absolute; bottom: 10px; left: 10px; background: rgba(0,0,0,0.7);
+                  color: #fff; padding: 10px; border-radius: 4px; font-size: 12px; }
+        .marker-cluster { background: #51aada; border-radius: 50%; color: white;
+                         text-align: center; display: flex; align-items: center; justify-content: center;
+                         font-weight: bold; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div id="status">Loading...</div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const map = L.map('map').setView([20, 0], 3);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors',
+            maxZoom: 19
+        }).addTo(map);
+
+        const markers = {}; // entityID → marker
+        const clusterMarkers = {}; // cellIndex → cluster marker
+        let ws = null;
+        let entityCount = 0;
+        let clusterCount = 0;
+
+        function connect() {
+            const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(proto + '//' + window.location.host + '/stream');
+            ws.onopen = () => {
+                document.getElementById('status').textContent = 'Connected';
+                sendViewport();
+            };
+            ws.onmessage = (e) => {
+                const delta = JSON.parse(e.data);
+                processDelta(delta);
+            };
+            ws.onerror = (e) => {
+                document.getElementById('status').textContent = 'Error: ' + e;
+            };
+            ws.onclose = () => {
+                document.getElementById('status').textContent = 'Disconnected. Reconnecting...';
+                setTimeout(connect, 2000);
+            };
+        }
+
+        function sendViewport() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const bounds = map.getBounds();
+                ws.send(JSON.stringify({
+                    type: 'viewport',
+                    north: bounds.getNorth(),
+                    south: bounds.getSouth(),
+                    east: bounds.getEast(),
+                    west: bounds.getWest(),
+                    zoom: map.getZoom()
+                }));
+            }
+        }
+
+        function processDelta(delta) {
+            // Add new entities
+            for (const e of delta.added || []) {
+                const marker = L.circleMarker([e.lat, e.lng], {
+                    radius: 4,
+                    fillColor: '#ff7800',
+                    color: '#000',
+                    weight: 1,
+                    opacity: 0.7,
+                    fillOpacity: 0.7
+                }).bindPopup(e.callSign || e.id).addTo(map);
+                markers[e.id] = marker;
+            }
+
+            // Update existing entities
+            for (const e of delta.updated || []) {
+                if (markers[e.id]) {
+                    markers[e.id].setLatLng([e.lat, e.lng]);
+                }
+            }
+
+            // Remove entities no longer in view
+            for (const id of delta.removed || []) {
+                if (markers[id]) {
+                    map.removeLayer(markers[id]);
+                    delete markers[id];
+                }
+            }
+
+            // Update cluster markers
+            for (const id of Object.keys(clusterMarkers)) {
+                map.removeLayer(clusterMarkers[id]);
+                delete(clusterMarkers[id]);
+            }
+            for (const [cellIdx, cluster] of Object.entries(delta.clusters || {})) {
+                // Use a divIcon to show the count directly on the map
+                const clusterIcon = L.divIcon({
+                    className: 'marker-cluster',
+                    html: '<div><span>' + cluster.count + '</span></div>',
+                    iconSize: [30, 30],
+                    iconAnchor: [15, 15]
+                });
+                
+                const clusterMarker = L.marker([cluster.lat, cluster.lng], {
+                    icon: clusterIcon
+                }).bindPopup("Cluster: " + cluster.count + " aircraft").addTo(map);
+
+                clusterMarkers[cellIdx] = clusterMarker;
+            }
+
+
+            entityCount = Object.keys(markers).length;
+            clusterCount = Object.keys(clusterMarkers).length;
+            updateStatus();
+        }
+
+        function updateStatus() {
+            document.getElementById('status').textContent =
+                entityCount + " aircraft | " + clusterCount + " clusters";
+        }
+
+        map.on('moveend', sendViewport);
+        map.on('zoomend', sendViewport);
+
+        connect();
+    </script>
+</body>
+</html>`
