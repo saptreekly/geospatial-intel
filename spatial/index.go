@@ -139,11 +139,11 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 					lastIdx := len(ids) - 1
 					ids[i] = ids[lastIdx]
 					ids = ids[:lastIdx]
+					idx.layers[job.res][job.cell] = ids // Force save
 				} else {
 					i++
 				}
 			}
-			idx.layers[job.res][job.cell] = ids
 			if len(idx.layers[job.res][job.cell]) == 0 {
 				delete(idx.layers[job.res], job.cell)
 			}
@@ -172,11 +172,11 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 								lastIdx := len(ids) - 1
 								ids[j] = ids[lastIdx]
 								ids = ids[:lastIdx]
+								idx.layers[res][oldCell] = ids // Force save
 							} else {
 								j++
 							}
 						}
-						idx.layers[res][oldCell] = ids
 						if len(idx.layers[res][oldCell]) == 0 {
 							delete(idx.layers[res], oldCell)
 						}
