@@ -51,13 +51,27 @@ func TestUpdate_Add(t *testing.T) {
 	if len(idx.layers[indexingResolution][h3e1]) != 1 {
 		t.Errorf("Expected 1 entity in h3e1 cell, got %d", len(idx.layers[indexingResolution][h3e1]))
 	}
-	if _, ok := idx.layers[indexingResolution][h3e1][e1.ID]; !ok {
+	foundE1 := false
+	for _, id := range idx.layers[indexingResolution][h3e1] {
+		if id == e1.ID {
+			foundE1 = true
+			break
+		}
+	}
+	if !foundE1 {
 		t.Errorf("Entity %s not found in layers[7] for h3e1", e1.ID)
 	}
 	if len(idx.layers[indexingResolution][h3e2]) != 1 {
 		t.Errorf("Expected 1 entity in h3e2 cell, got %d", len(idx.layers[indexingResolution][h3e2]))
 	}
-	if _, ok := idx.layers[indexingResolution][h3e2][e2.ID]; !ok {
+	foundE2 := false
+	for _, id := range idx.layers[indexingResolution][h3e2] {
+		if id == e2.ID {
+			foundE2 = true
+			break
+		}
+	}
+	if !foundE2 {
 		t.Errorf("Entity %s not found in layers[7] for h3e2", e2.ID)
 	}
 }
@@ -92,7 +106,14 @@ func TestUpdate_Update(t *testing.T) {
 	if len(idx.layers[indexingResolution][newH3e1]) != 1 {
 		t.Errorf("Expected 1 entity in new H3 cell %d, got %d", newH3e1, len(idx.layers[indexingResolution][newH3e1]))
 	}
-	if _, ok := idx.layers[indexingResolution][newH3e1][e1Updated.ID]; !ok {
+	foundUpdated := false
+	for _, id := range idx.layers[indexingResolution][newH3e1] {
+		if id == e1Updated.ID {
+			foundUpdated = true
+			break
+		}
+	}
+	if !foundUpdated {
 		t.Errorf("Updated entity %s not found in layers[7] for new H3 cell", e1Updated.ID)
 	}
 }
@@ -299,8 +320,15 @@ func TestUpdate_NoCellChange(t *testing.T) {
 	if len(idx.layers[indexingResolution][h3e1]) != 1 {
 		t.Errorf("Expected 1 entity in H3 cell %d, got %d", h3e1, len(idx.layers[indexingResolution][h3e1]))
 	}
-	if idx.layers[indexingResolution][h3e1][e1Updated.ID].Source != "updated_test" {
-		t.Errorf("Entity source in layers[7] not updated")
+	found := false
+	for _, id := range idx.layers[indexingResolution][h3e1] {
+		if id == e1Updated.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Entity %s not found in layers[7] for h3e1", e1Updated.ID)
 	}
 }
 

@@ -34,8 +34,9 @@ var targetResolutions = []int{2, 4, 6, 7}
 type Index struct {
 	mu               sync.RWMutex
 	entities         map[string]entity.Entity
-	layers           map[int]map[h3.Cell]map[string]entity.Entity
+	layers           map[int]map[h3.Cell][]string
 	globalCellCounts map[int]map[h3.Cell]int
+	totalGlobalCounts map[int]int
 	// Reusable vector scratchpads
 	latsBuf, lngsBuf                   []float64
 	res2Buf, res4Buf, res6Buf, res7Buf []uint64
@@ -43,23 +44,26 @@ type Index struct {
 
 // NewIndex creates a new spatial index.
 func NewIndex() *Index {
-	layers := make(map[int]map[h3.Cell]map[string]entity.Entity)
+	layers := make(map[int]map[h3.Cell][]string)
 	globalCellCounts := make(map[int]map[h3.Cell]int)
+	totalGlobalCounts := make(map[int]int)
 	for _, res := range targetResolutions {
-		layers[res] = make(map[h3.Cell]map[string]entity.Entity)
+		layers[res] = make(map[h3.Cell][]string)
 		globalCellCounts[res] = make(map[h3.Cell]int)
+		totalGlobalCounts[res] = 0
 	}
 	initialCap := 100000
 	return &Index{
-		entities:         make(map[string]entity.Entity),
-		layers:           layers,
-		globalCellCounts: globalCellCounts,
-		latsBuf:          make([]float64, 0, initialCap),
-		lngsBuf:          make([]float64, 0, initialCap),
-		res2Buf:          make([]uint64, 0, initialCap),
-		res4Buf:          make([]uint64, 0, initialCap),
-		res6Buf:          make([]uint64, 0, initialCap),
-		res7Buf:          make([]uint64, 0, initialCap),
+		entities:          make(map[string]entity.Entity),
+		layers:            layers,
+		globalCellCounts:  globalCellCounts,
+		totalGlobalCounts: totalGlobalCounts,
+		latsBuf:           make([]float64, 0, initialCap),
+		lngsBuf:           make([]float64, 0, initialCap),
+		res2Buf:           make([]uint64, 0, initialCap),
+		res4Buf:           make([]uint64, 0, initialCap),
+		res6Buf:           make([]uint64, 0, initialCap),
+		res7Buf:           make([]uint64, 0, initialCap),
 	}
 }
 
@@ -143,9 +147,16 @@ func (idx *Index) removeEntitiesLocked(removed []string) {
 					if idx.globalCellCounts[res][cell] == 0 {
 						delete(idx.globalCellCounts[res], cell)
 					}
-					if cellMap, found := idx.layers[res][cell]; found {
-						delete(cellMap, id)
-						if len(cellMap) == 0 {
+					idx.totalGlobalCounts[res]-- // Decrement total count
+
+					if ids, found := idx.layers[res][cell]; found {
+						for i, existingID := range ids {
+							if existingID == id {
+								idx.layers[res][cell] = append(ids[:i], ids[i+1:]...)
+								break
+							}
+						}
+						if len(idx.layers[res][cell]) == 0 {
 							delete(idx.layers[res], cell)
 						}
 					}
@@ -168,9 +179,16 @@ func (idx *Index) insertEntitiesLocked(entities []entity.Entity, res2, res4, res
 					if idx.globalCellCounts[res][oldCell] == 0 {
 						delete(idx.globalCellCounts[res], oldCell)
 					}
-					if cellMap, found := idx.layers[res][oldCell]; found {
-						delete(cellMap, e.ID)
-						if len(cellMap) == 0 {
+					idx.totalGlobalCounts[res]-- // Decrement total count
+
+					if ids, found := idx.layers[res][oldCell]; found {
+						for j, existingID := range ids {
+							if existingID == e.ID {
+								idx.layers[res][oldCell] = append(ids[:j], ids[j+1:]...)
+								break
+							}
+						}
+						if len(idx.layers[res][oldCell]) == 0 {
 							delete(idx.layers[res], oldCell)
 						}
 					}
@@ -188,10 +206,9 @@ func (idx *Index) insertEntitiesLocked(entities []entity.Entity, res2, res4, res
 				continue
 			}
 			idx.globalCellCounts[res][cell]++
-			if _, ok := idx.layers[res][cell]; !ok {
-				idx.layers[res][cell] = make(map[string]entity.Entity)
-			}
-			idx.layers[res][cell][e.ID] = e
+			idx.totalGlobalCounts[res]++ // Increment total count
+
+			idx.layers[res][cell] = append(idx.layers[res][cell], e.ID)
 		}
 	}
 }
@@ -224,19 +241,23 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 	}
 
 	layer := idx.layers[queryResolution]
+	totalEntitiesInViewport := 0
 	for _, viewCell := range viewportCells {
-		if entitiesInCell, found := layer[viewCell]; found {
-			for _, e := range entitiesInCell {
-				if _, alreadyProcessed := processedEntities[e.ID]; alreadyProcessed {
+		if ids, found := layer[viewCell]; found {
+			for _, id := range ids {
+				if _, alreadyProcessed := processedEntities[id]; alreadyProcessed {
 					continue
 				}
 
 				if !onlyClusters {
 					// Explicitly copy to avoid raw pointer exposure
-					eCopy := e
-					visible = append(visible, eCopy)
+					if e, ok := idx.entities[id]; ok {
+						eCopy := e
+						visible = append(visible, eCopy)
+					}
 				}
-				processedEntities[e.ID] = struct{}{}
+				totalEntitiesInViewport++
+				processedEntities[id] = struct{}{}
 			}
 		}
 
@@ -245,15 +266,29 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 		}
 	}
 
-	// 2. ALSO iterate over ALL global cells to find entities NOT in viewport to cluster them
-	for cell, count := range idx.globalCellCounts[queryResolution] {
-		if _, inViewport := viewportCellSet[cell]; !inViewport {
-			clusterCounts[cell] += count
+	// 2. O(1) aggregate calculation for out-of-view clusters when zoomed in
+	clusters = make(map[string]entity.Cluster)
+	if !onlyClusters {
+		outOfViewCount := idx.totalGlobalCounts[queryResolution] - totalEntitiesInViewport
+		if outOfViewCount > 0 {
+			// Pass this as a unified metrics key
+			clusters["out_of_view"] = entity.Cluster{
+				Count: outOfViewCount,
+			}
 		}
 	}
 
-	// Convert cluster cells to entity.Cluster with centroids
-	clusters = idx.buildClustersPayload(clusterCounts, viewportCells, onlyClusters)
+	// Convert cluster cells to entity.Cluster with centroids (only for zoomed out)
+	if onlyClusters {
+		for cell, count := range clusterCounts {
+			latLng, _ := h3.CellToLatLng(cell)
+			clusters[cell.String()] = entity.Cluster{
+				Lat:   latLng.Lat,
+				Lng:   latLng.Lng,
+				Count: count,
+			}
+		}
+	}
 
 	return visible, clusters, nil
 }
