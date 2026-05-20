@@ -1,4 +1,4 @@
-module github.com/jackweekly/osint
+module github.com/saptreekly/OSINT
 
 go 1.26.2
 

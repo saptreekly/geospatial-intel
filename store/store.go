@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jackweekly/osint/entity"
-	"github.com/jackweekly/osint/spatial"
+	"github.com/saptreekly/OSINT/entity"
+	"github.com/saptreekly/OSINT/spatial"
 	_ "github.com/mattn/go-sqlite3"
 )
 

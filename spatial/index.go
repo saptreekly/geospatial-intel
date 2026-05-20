@@ -21,7 +21,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/jackweekly/osint/entity"
+	"github.com/saptreekly/OSINT/entity"
 	"github.com/uber/h3-go/v4"
 )
 

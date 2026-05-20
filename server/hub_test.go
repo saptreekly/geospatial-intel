@@ -3,8 +3,8 @@ package server
 import (
 	"testing"
 	"time"
-	"github.com/jackweekly/osint/entity"
-	"github.com/jackweekly/osint/store"
+	"github.com/saptreekly/OSINT/entity"
+	"github.com/saptreekly/OSINT/store"
 )
 
 func TestHub_BroadcastOptimization(t *testing.T) {

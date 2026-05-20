@@ -11,10 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackweekly/osint/entity"
-	"github.com/jackweekly/osint/seeder"
-	"github.com/jackweekly/osint/server"
-	"github.com/jackweekly/osint/store"
+	"github.com/saptreekly/OSINT/entity"
+	"github.com/saptreekly/OSINT/seeder"
+	"github.com/saptreekly/OSINT/server"
+	"github.com/saptreekly/OSINT/store"
 )
 
 func main() {

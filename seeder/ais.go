@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/jackweekly/osint/entity"
+	"github.com/saptreekly/OSINT/entity"
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
 )

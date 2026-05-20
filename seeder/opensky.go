@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/jackweekly/osint/entity"
+	"github.com/saptreekly/OSINT/entity"
 	"github.com/tidwall/gjson"
 )
 
