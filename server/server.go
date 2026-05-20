@@ -75,6 +75,7 @@ const indexHTML = `<!DOCTYPE html>
     <div id="status">Loading...</div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-marker-slideto@0.2.0/Leaflet.Marker.SlideTo.js"></script>
     <script>
         const map = L.map('map').setView([20, 0], 3);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -144,7 +145,11 @@ const indexHTML = `<!DOCTYPE html>
             // Update existing entities
             for (const e of delta.updated || []) {
                 if (markers[e.id]) {
-                    markers[e.id].setLatLng([e.lat, e.lng]);
+                    // Update position smoothly over 2 seconds
+                    markers[e.id].slideTo([e.lat, e.lng], {
+                        duration: 2000,
+                        keepAtCenter: false
+                    });
                 }
             }
 
