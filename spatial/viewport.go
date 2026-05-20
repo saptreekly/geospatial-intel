@@ -22,6 +22,15 @@ func ZoomToResolution(zoom int) int {
 // ViewportToCells converts a viewport to H3 cells at the appropriate resolution.
 // Handles antimeridian wrapping (west > east) by splitting into two queries.
 func ViewportToCells(vp entity.Viewport, resolution int) ([]h3.Cell, error) {
+	// Special case for global viewport (covers entire Earth)
+	if vp.North >= 90.0 && vp.South <= -90.0 && vp.East >= 180.0 && vp.West <= -180.0 {
+		res0, err := h3.Res0Cells()
+		if err != nil {
+			return nil, err
+		}
+		return h3.UncompactCells(res0, resolution)
+	}
+
 	// Build polygon from bbox corners
 	corners := h3.GeoLoop{
 		h3.LatLng{Lat: vp.North, Lng: vp.West},
