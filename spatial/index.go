@@ -72,7 +72,7 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	start := time.Now()
 	defer util.LogIfSlow(start, 50*time.Millisecond, "BatchUpdateRust")
 
-	// STEP 1: PRE-COMPUTE REMOVAL CELLS (READ LOCK ONLY, NO WRITE LOCK!)
+	// STEP 1: PRE-COMPUTE REMOVALS (RLOCK ONLY)
 	var removalJobs []precomputedRemoval
 	if len(removed) > 0 {
 		idx.mu.RLock()
@@ -89,7 +89,7 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 		idx.mu.RUnlock()
 	}
 
-	// STEP 2: PRE-COMPUTE NEW INDICES VIA RUST NATIVE CORE (NO LOCKS!)
+	// STEP 2: PROJECT CGO LATENCY CHANNELS (NO LOCKS!)
 	count := len(entities)
 	var r2, r4, r6, r7 []uint64
 	if count > 0 {
@@ -116,7 +116,7 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 		)
 	}
 
-	// STEP 3: ATOMIC MEMORY MUTATION GATE (ONE TIGHT, FAST WRITE LOCK!)
+	// STEP 3: ATOMIC MEMORY WRITE DOORWAY (TIGHT LOCK GATEWAY)
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
@@ -125,7 +125,7 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 		removedSet[id] = struct{}{}
 	}
 
-	// Instant Deletions
+	// Instant Deletions O(1) Swaps
 	for _, job := range removalJobs {
 		idx.globalCellCounts[job.res][job.cell]--
 		if idx.globalCellCounts[job.res][job.cell] == 0 {
@@ -153,7 +153,7 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 		delete(idx.entities, id)
 	}
 
-	// Instant Insertions / Updates
+	// Instant Insertions
 	for i, e := range entities {
 		oldEntity, exists := idx.entities[e.ID]
 		if exists {
