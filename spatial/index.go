@@ -32,17 +32,17 @@ var targetResolutions = []int{2, 4, 6, 7}
 type Index struct {
 	mu                sync.RWMutex
 	entities          map[string]entity.Entity
-	layers            map[int]map[h3.Cell]map[string]struct{}
+	layers            map[int]map[h3.Cell][]string
 	globalCellCounts  map[int]map[h3.Cell]int
 	totalGlobalCounts map[int]int
 }
 
 func NewIndex() *Index {
-	layers := make(map[int]map[h3.Cell]map[string]struct{})
+	layers := make(map[int]map[h3.Cell][]string)
 	globalCellCounts := make(map[int]map[h3.Cell]int)
 	totalGlobalCounts := make(map[int]int)
 	for _, res := range targetResolutions {
-		layers[res] = make(map[h3.Cell]map[string]struct{})
+		layers[res] = make(map[h3.Cell][]string)
 		globalCellCounts[res] = make(map[h3.Cell]int)
 		totalGlobalCounts[res] = 0
 	}
@@ -111,24 +111,20 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	removedSet := make(map[string]struct{}, len(removed))
-	for _, id := range removed {
-		removedSet[id] = struct{}{}
-	}
-
 	// Exec Deletions
 	for _, job := range removalJobs {
-		if cellMap, found := idx.layers[job.res][job.cell]; found {
-			for _, id := range removed {
-				if _, exists := cellMap[id]; exists {
-					delete(cellMap, id)
+		ids := idx.layers[job.res][job.cell]
+		for _, id := range removed {
+			for i, existingID := range ids {
+				if existingID == id {
+					lastIdx := len(ids) - 1
+					ids[i] = ids[lastIdx]
+					ids = ids[:lastIdx]
+					idx.layers[job.res][job.cell] = ids
 					idx.globalCellCounts[job.res][job.cell]--
 					idx.totalGlobalCounts[job.res]--
+					break
 				}
-			}
-			if len(cellMap) == 0 {
-				delete(idx.layers[job.res], job.cell)
-				delete(idx.globalCellCounts[job.res], job.cell)
 			}
 		}
 	}
@@ -143,15 +139,16 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 			latLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
 			for _, res := range targetResolutions {
 				if oldCell, oldErr := h3.LatLngToCell(latLng, res); oldErr == nil {
-					if cellMap, found := idx.layers[res][oldCell]; found {
-						if _, hasItem := cellMap[e.ID]; hasItem {
-							delete(cellMap, e.ID)
+					ids := idx.layers[res][oldCell]
+					for j, existingID := range ids {
+						if existingID == e.ID {
+							lastIdx := len(ids) - 1
+							ids[j] = ids[lastIdx]
+							ids = ids[:lastIdx]
+							idx.layers[res][oldCell] = ids
 							idx.globalCellCounts[res][oldCell]--
 							idx.totalGlobalCounts[res]--
-						}
-						if len(cellMap) == 0 {
-							delete(idx.layers[res], oldCell)
-							delete(idx.globalCellCounts[res], oldCell)
+							break
 						}
 					}
 				}
@@ -167,12 +164,17 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 				continue
 			}
 			
-			if _, initialized := idx.layers[res][cell]; !initialized {
-				idx.layers[res][cell] = make(map[string]struct{})
+			ids := idx.layers[res][cell]
+			exists := false
+			for _, id := range ids {
+				if id == e.ID {
+					exists = true
+					break
+				}
 			}
 			
-			if _, exists := idx.layers[res][cell][e.ID]; !exists {
-				idx.layers[res][cell][e.ID] = struct{}{}
+			if !exists {
+				idx.layers[res][cell] = append(ids, e.ID)
 				idx.globalCellCounts[res][cell]++
 				idx.totalGlobalCounts[res]++
 			}
@@ -206,8 +208,9 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 	layer := idx.layers[queryResolution]
 	totalEntitiesInViewport := 0
 	for viewCell := range viewportCellSet {
-		if cellMap, found := layer[viewCell]; found {
-			for id := range cellMap {
+		if ids, found := layer[viewCell]; found {
+			for i := 0; i < len(ids); i++ {
+				id := ids[i]
 				if _, alreadyProcessed := processedEntities[id]; alreadyProcessed {
 					continue
 				}

@@ -53,8 +53,9 @@ func TestUpdate_Add(t *testing.T) {
 	if len(idx.layers[indexingResolution][h3e1]) != 1 {
 		t.Errorf("Expected 1 entity in h3e1 cell, got %d", len(idx.layers[indexingResolution][h3e1]))
 	}
+	
 	foundE1 := false
-	for id := range idx.layers[indexingResolution][h3e1] {
+	for _, id := range idx.layers[indexingResolution][h3e1] {
 		if id == e1.ID {
 			foundE1 = true
 			break
@@ -63,11 +64,12 @@ func TestUpdate_Add(t *testing.T) {
 	if !foundE1 {
 		t.Errorf("Entity %s not found in layers[7] for h3e1", e1.ID)
 	}
+	
 	if len(idx.layers[indexingResolution][h3e2]) != 1 {
 		t.Errorf("Expected 1 entity in h3e2 cell, got %d", len(idx.layers[indexingResolution][h3e2]))
 	}
 	foundE2 := false
-	for id := range idx.layers[indexingResolution][h3e2] {
+	for _, id := range idx.layers[indexingResolution][h3e2] {
 		if id == e2.ID {
 			foundE2 = true
 			break
@@ -100,8 +102,10 @@ func TestUpdate_Update(t *testing.T) {
 
 	// If cell changed, old cell should be empty
 	if oldH3e1 != newH3e1 {
-		if _, found := idx.layers[indexingResolution][oldH3e1]; found {
-			t.Errorf("Old H3 cell %d for e1 should be empty", oldH3e1)
+		if ids, found := idx.layers[indexingResolution][oldH3e1]; found {
+			if len(ids) > 0 {
+				t.Errorf("Old H3 cell %d for e1 should be empty", oldH3e1)
+			}
 		}
 	}
 
@@ -109,7 +113,7 @@ func TestUpdate_Update(t *testing.T) {
 		t.Errorf("Expected 1 entity in new H3 cell %d, got %d", newH3e1, len(idx.layers[indexingResolution][newH3e1]))
 	}
 	foundUpdated := false
-	for id := range idx.layers[indexingResolution][newH3e1] {
+	for _, id := range idx.layers[indexingResolution][newH3e1] {
 		if id == e1Updated.ID {
 			foundUpdated = true
 			break
@@ -140,9 +144,12 @@ func TestUpdate_Remove(t *testing.T) {
 	}
 
 	h3e1, _ := h3.LatLngToCell(h3.LatLng{Lat: e1.Lat, Lng: e1.Lng}, indexingResolution)
-	if _, found := idx.layers[indexingResolution][h3e1]; found {
-		t.Errorf("Old H3 cell %d for e1 should be empty after removal", h3e1)
+	if ids, found := idx.layers[indexingResolution][h3e1]; found {
+		if len(ids) > 0 {
+			t.Errorf("Old H3 cell %d for e1 should be empty after removal, but found %d entities", h3e1, len(ids))
+		}
 	}
+	
 	h3e2, _ := h3.LatLngToCell(h3.LatLng{Lat: e2.Lat, Lng: e2.Lng}, indexingResolution)
 	if len(idx.layers[indexingResolution][h3e2]) != 1 {
 		t.Errorf("Expected 1 entity in h3e2 cell after removal of e1, got %d", len(idx.layers[indexingResolution][h3e2]))
@@ -267,7 +274,7 @@ func TestUpdate_NoCellChange(t *testing.T) {
 		t.Errorf("Expected 1 entity in H3 cell %d, got %d", h3e1, len(idx.layers[indexingResolution][h3e1]))
 	}
 	found := false
-	for id := range idx.layers[indexingResolution][h3e1] {
+	for _, id := range idx.layers[indexingResolution][h3e1] {
 		if id == e1Updated.ID {
 			found = true
 			break
