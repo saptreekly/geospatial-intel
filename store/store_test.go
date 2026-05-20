@@ -1,8 +1,8 @@
 package store
-
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,7 +11,9 @@ import (
 )
 
 func TestRecordHistoryPerformanceLogging(t *testing.T) {
-	util.InitPerfLogger("../performance_logs.md")
+	tmpDir := t.TempDir()
+	logPath := filepath.Join(tmpDir, "performance_logs.md")
+	util.InitPerfLogger(logPath)
 	s := NewStore()
 	defer os.Remove("osint.db")
 
@@ -31,7 +33,7 @@ func TestRecordHistoryPerformanceLogging(t *testing.T) {
 	s.recordHistory(entities)
 
 	// Verify log file content
-	content, err := os.ReadFile("performance_logs.md")
+	content, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("Failed to read log file: %v", err)
 	}

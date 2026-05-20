@@ -90,7 +90,7 @@ func (s *Store) recordHistory(entities []entity.Entity) {
 	}
 	tx.Commit()
 
-	if time.Since(start) > 200*time.Millisecond {
+	if time.Since(start) > 1*time.Millisecond {
 		msg := "CRITICAL: SQLite disk transaction slow: " + time.Since(start).String()
 		log.Printf("%s", msg)
 		util.LogPerformance(msg)
