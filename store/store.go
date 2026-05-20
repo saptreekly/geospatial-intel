@@ -96,7 +96,7 @@ func (s *Store) recordHistory(entities []entity.Entity) {
 		return
 	}
 
-	const chunkSize = 500
+	const chunkSize = 5000
 	for i := 0; i < len(entities); i += chunkSize {
 		end := i + chunkSize
 		if end > len(entities) {

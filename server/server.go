@@ -81,9 +81,12 @@ var indexHTML = `<!DOCTYPE html>
         #map { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
         #status { position: absolute; bottom: 10px; left: 10px; background: rgba(0,0,0,0.7);
                   color: #fff; padding: 10px; border-radius: 4px; font-size: 12px; }
-        .marker-cluster { background: #51aada; border-radius: 50%; color: white;
-                         text-align: center; display: flex; align-items: center; justify-content: center;
-                         font-weight: bold; font-size: 14px; }
+        .radar-blip {
+            background: rgba(255, 165, 0, 0.6);
+            border: 1px solid rgba(255, 165, 0, 0.9);
+            border-radius: 50%;
+            box-shadow: 0 0 4px rgba(255, 165, 0, 0.8);
+        }
     </style>
 </head>
 <body>
@@ -183,12 +186,15 @@ var indexHTML = `<!DOCTYPE html>
                 delete(clusterMarkers[id]);
             }
             for (const [cellIdx, cluster] of Object.entries(delta.clusters || {})) {
-                // Use a divIcon to show the count directly on the map
+                // Calculate dynamic size
+                const size = Math.min(10 + (cluster.count / 5), 40);
+                
+                // Use a divIcon to show radar blip
                 const clusterIcon = L.divIcon({
-                    className: 'marker-cluster',
-                    html: '<div><span>' + cluster.count + '</span></div>',
-                    iconSize: [30, 30],
-                    iconAnchor: [15, 15]
+                    className: 'radar-blip',
+                    html: '',
+                    iconSize: [size, size],
+                    iconAnchor: [size / 2, size / 2]
                 });
                 
                 const clusterMarker = L.marker([cluster.lat, cluster.lng], {
