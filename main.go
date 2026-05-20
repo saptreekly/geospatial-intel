@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"github.com/saptreekly/geospatial-intel/entity"
 	"github.com/saptreekly/geospatial-intel/seeder"
 	"github.com/saptreekly/geospatial-intel/server"
@@ -19,6 +21,10 @@ import (
 )
 
 func main() {
+	// Load the .env file. We ignore the error so it doesn't crash
+	// in production where you might be using real system env vars instead.
+	_ = godotenv.Load()
+
 	util.InitPerfLogger("performance_logs.md")
 	// Parse environment variables
 	port := os.Getenv("PORT")
