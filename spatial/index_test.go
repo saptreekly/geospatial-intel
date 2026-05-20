@@ -33,7 +33,7 @@ func TestUpdate_Add(t *testing.T) {
 	e1 := createTestEntity("e1", 0.0, 0.0)
 	e2 := createTestEntity("e2", 1.0, 1.0)
 
-	idx.Update([]entity.Entity{e1, e2}, nil)
+	idx.BatchUpdateRust([]entity.Entity{e1, e2}, nil)
 
 	if len(idx.entities) != 2 {
 		t.Errorf("Expected 2 entities, got %d", len(idx.entities))
@@ -66,11 +66,11 @@ func TestUpdate_Add(t *testing.T) {
 func TestUpdate_Update(t *testing.T) {
 	idx := NewIndex()
 	e1 := createTestEntity("e1", 0.0, 0.0)
-	idx.Update([]entity.Entity{e1}, nil)
+	idx.BatchUpdateRust([]entity.Entity{e1}, nil)
 
 	// Update e1's position
 	e1Updated := createTestEntity("e1", 0.01, 0.01)
-	idx.Update([]entity.Entity{e1Updated}, nil)
+	idx.BatchUpdateRust([]entity.Entity{e1Updated}, nil)
 
 	if len(idx.entities) != 1 {
 		t.Errorf("Expected 1 entity after update, got %d", len(idx.entities))
@@ -102,9 +102,9 @@ func TestUpdate_Remove(t *testing.T) {
 	idx := NewIndex()
 	e1 := createTestEntity("e1", 0.0, 0.0)
 	e2 := createTestEntity("e2", 1.0, 1.0)
-	idx.Update([]entity.Entity{e1, e2}, nil)
+	idx.BatchUpdateRust([]entity.Entity{e1, e2}, nil)
 
-	idx.Update(nil, []string{e1.ID})
+	idx.BatchUpdateRust(nil, []string{e1.ID})
 
 	if len(idx.entities) != 1 {
 		t.Errorf("Expected 1 entity after removal, got %d", len(idx.entities))
@@ -133,7 +133,7 @@ func TestQuery_Visible(t *testing.T) {
 	e1 := createTestEntity("e1", 34.0522, -118.2437) // Los Angeles
 	e2 := createTestEntity("e2", 34.0522, -118.2437) // Same cell as e1
 	e3 := createTestEntity("e3", 40.7128, -74.0060) // New York
-	idx.Update([]entity.Entity{e1, e2, e3}, nil)
+	idx.BatchUpdateRust([]entity.Entity{e1, e2, e3}, nil)
 
 	// Viewport covering Los Angeles at zoom level 7 (resolution 7)
 	// (North, South, East, West)
@@ -176,7 +176,7 @@ func TestQuery_Clusters(t *testing.T) {
 	e2 := createTestEntity("e2", 0.1, 0.1)
 	e3 := createTestEntity("e3", 5.0, 5.0)
 	e4 := createTestEntity("e4", 5.1, 5.1)
-	idx.Update([]entity.Entity{e1, e2, e3, e4}, nil)
+	idx.BatchUpdateRust([]entity.Entity{e1, e2, e3, e4}, nil)
 
 	// Very zoomed out viewport (zoom 0 -> resolution 2), everything should cluster
 	vpGlobal := entity.Viewport{
@@ -215,7 +215,7 @@ func TestQuery_Mixed(t *testing.T) {
 	e2 := createTestEntity("e2", 34.0550, -118.2500) // LA nearby
 	e3 := createTestEntity("e3", 40.7128, -74.0060)  // NY
 	e4 := createTestEntity("e4", 40.7130, -74.0070)  // NY nearby
-	idx.Update([]entity.Entity{e1, e2, e3, e4}, nil)
+	idx.BatchUpdateRust([]entity.Entity{e1, e2, e3, e4}, nil)
 
 	// Viewport covering Los Angeles at zoom 7 (resolution 7)
 	vpLA := entity.Viewport{
@@ -281,12 +281,12 @@ func TestQuery_EmptyIndex(t *testing.T) {
 func TestUpdate_NoCellChange(t *testing.T) {
 	idx := NewIndex()
 	e1 := createTestEntity("e1", 0.0, 0.0)
-	idx.Update([]entity.Entity{e1}, nil)
+	idx.BatchUpdateRust([]entity.Entity{e1}, nil)
 
 	// Update e1's non-spatial attribute
 	e1Updated := e1
 	e1Updated.Source = "updated_test"
-	idx.Update([]entity.Entity{e1Updated}, nil)
+	idx.BatchUpdateRust([]entity.Entity{e1Updated}, nil)
 
 	if len(idx.entities) != 1 {
 		t.Errorf("Expected 1 entity after update, got %d", len(idx.entities))
@@ -309,7 +309,7 @@ func TestUpdate_NoCellChange(t *testing.T) {
 func TestQuery_BoundaryMovement(t *testing.T) {
 	idx := NewIndex()
 	e1 := createTestEntity("e1", 0.0, 0.0)
-	idx.Update([]entity.Entity{e1}, nil)
+	idx.BatchUpdateRust([]entity.Entity{e1}, nil)
 
 	// Viewport covering the entity
 	vp := entity.Viewport{North: 1.0, South: -1.0, East: 1.0, West: -1.0, Zoom: 7}
@@ -322,7 +322,7 @@ func TestQuery_BoundaryMovement(t *testing.T) {
 
 	// Move entity out of viewport
 	e1Updated := createTestEntity("e1", 10.0, 10.0)
-	idx.Update([]entity.Entity{e1Updated}, nil)
+	idx.BatchUpdateRust([]entity.Entity{e1Updated}, nil)
 
 	// Query 2: Entity not visible (should be in clusters if outside)
 	visible, clusters, _ := idx.Query(vp)
@@ -338,7 +338,7 @@ func TestQuery_BoundaryMovement(t *testing.T) {
 func TestQuery_ZoomTransition(t *testing.T) {
 	idx := NewIndex()
 	e1 := createTestEntity("e1", 0.0, 0.0)
-	idx.Update([]entity.Entity{e1}, nil)
+	idx.BatchUpdateRust([]entity.Entity{e1}, nil)
 
 	// Zoomed in (Resolution 7) -> Visible
 	vpIn := entity.Viewport{North: 1.0, South: -1.0, East: 1.0, West: -1.0, Zoom: 7}

@@ -1,7 +1,25 @@
 package spatial
 
+/*
+#cgo LDFLAGS: -L../spatial_engine/target/release -lspatial_engine
+#include <stdint.h>
+#include <stddef.h>
+
+int compute_resolutions_batch(
+    const double* lats, 
+    const double* lngs, 
+    size_t count, 
+    uint64_t* out_res2, 
+    uint64_t* out_res4, 
+    uint64_t* out_res6, 
+    uint64_t* out_res7
+);
+*/
+import "C"
+
 import (
 	"sync"
+	"unsafe"
 
 	"github.com/jackweekly/OSINT/entity"
 	"github.com/uber/h3-go/v4"
@@ -29,15 +47,46 @@ func NewIndex() *Index {
 	}
 }
 
-// Update adds or updates entities and removes stale ones.
-func (idx *Index) Update(entities []entity.Entity, removed []string) {
+// BatchUpdateRust updates entities using the Rust spatial engine.
+func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
+	if len(entities) == 0 && len(removed) == 0 {
+		return
+	}
+
+	// Prepare data for CGO call
+	count := len(entities)
+	lats := make([]float64, count)
+	lngs := make([]float64, count)
+	res2 := make([]uint64, count)
+	res4 := make([]uint64, count)
+	res6 := make([]uint64, count)
+	res7 := make([]uint64, count)
+
+	for i, e := range entities {
+		lats[i] = e.Lat
+		lngs[i] = e.Lng
+	}
+
+	// Call Rust engine
+	if count > 0 {
+		C.compute_resolutions_batch(
+			(*C.double)(unsafe.Pointer(&lats[0])),
+			(*C.double)(unsafe.Pointer(&lngs[0])),
+			C.size_t(count),
+			(*C.uint64_t)(unsafe.Pointer(&res2[0])),
+			(*C.uint64_t)(unsafe.Pointer(&res4[0])),
+			(*C.uint64_t)(unsafe.Pointer(&res6[0])),
+			(*C.uint64_t)(unsafe.Pointer(&res7[0])),
+		)
+	}
+
+	// Update internal state
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	// 1. Remove entities
+	// 1. Remove entities (existing Update logic for removal)
 	for _, id := range removed {
 		if oldEntity, ok := idx.entities[id]; ok {
-			// Remove from all layers
 			latLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
 			for _, res := range targetResolutions {
 				cell, err := h3.LatLngToCell(latLng, res)
@@ -50,18 +99,14 @@ func (idx *Index) Update(entities []entity.Entity, removed []string) {
 					}
 				}
 			}
-			// Remove from entities map
 			delete(idx.entities, id)
 		}
 	}
 
-	// 2. Add or update entities
-	for _, e := range entities {
+	// 2. Add/update entities
+	for i, e := range entities {
 		oldEntity, exists := idx.entities[e.ID]
-		latLng := h3.LatLng{Lat: e.Lat, Lng: e.Lng}
-
 		if exists {
-			// If entity existed, remove from all layers
 			oldLatLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
 			for _, res := range targetResolutions {
 				oldCell, oldErr := h3.LatLngToCell(oldLatLng, res)
@@ -76,19 +121,18 @@ func (idx *Index) Update(entities []entity.Entity, removed []string) {
 			}
 		}
 
-		// Add/update in entities map
 		idx.entities[e.ID] = e
 
-		// Add/update in all layers
-		for _, res := range targetResolutions {
-			newCell, err := h3.LatLngToCell(latLng, res)
-			if err != nil {
+		// Use H3 indices from Rust
+		cells := map[int]h3.Cell{2: h3.Cell(res2[i]), 4: h3.Cell(res4[i]), 6: h3.Cell(res6[i]), 7: h3.Cell(res7[i])}
+		for res, cell := range cells {
+			if cell == 0 {
 				continue
 			}
-			if _, ok := idx.layers[res][newCell]; !ok {
-				idx.layers[res][newCell] = make(map[string]entity.Entity)
+			if _, ok := idx.layers[res][cell]; !ok {
+				idx.layers[res][cell] = make(map[string]entity.Entity)
 			}
-			idx.layers[res][newCell][e.ID] = e
+			idx.layers[res][cell][e.ID] = e
 		}
 	}
 }

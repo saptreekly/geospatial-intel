@@ -77,7 +77,7 @@ func (s *Store) Apply(entities []entity.Entity) {
 	}
 
 	// Update spatial index
-	s.index.Update(append(added, updated...), removed)
+	s.index.BatchUpdateRust(append(added, updated...), removed)
 
 	// Emit event to all subscribers
 	event := StoreEvent{
