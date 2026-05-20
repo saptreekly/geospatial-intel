@@ -10,6 +10,7 @@ int compute_resolutions_batch(
     const double* lngs,
     size_t count,
     uint64_t* out_res2,
+    uint64_t* out_res3,
     uint64_t* out_res4,
     uint64_t* out_res6,
     uint64_t* out_res7
@@ -27,7 +28,7 @@ import (
 	"github.com/uber/h3-go/v4"
 )
 
-var targetResolutions = []int{2, 4, 6, 7}
+var targetResolutions = []int{2, 3, 4, 6, 7}
 
 var (
 	visiblePool = sync.Pool{New: func() interface{} { return make([]entity.Entity, 0, 1024) }}
@@ -50,6 +51,7 @@ type Index struct {
 	latsBuf           []float64
 	lngsBuf           []float64
 	r2Buf             []uint64
+	r3Buf             []uint64
 	r4Buf             []uint64
 	r6Buf             []uint64
 	r7Buf             []uint64
@@ -76,6 +78,7 @@ func NewIndex() *Index {
 		latsBuf:           make([]float64, 0),
 		lngsBuf:           make([]float64, 0),
 		r2Buf:             make([]uint64, 0),
+		r3Buf:             make([]uint64, 0),
 		r4Buf:             make([]uint64, 0),
 		r6Buf:             make([]uint64, 0),
 		r7Buf:             make([]uint64, 0),
@@ -128,6 +131,7 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 			idx.latsBuf = make([]float64, count)
 			idx.lngsBuf = make([]float64, count)
 			idx.r2Buf = make([]uint64, count)
+			idx.r3Buf = make([]uint64, count)
 			idx.r4Buf = make([]uint64, count)
 			idx.r6Buf = make([]uint64, count)
 			idx.r7Buf = make([]uint64, count)
@@ -135,6 +139,7 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 		lats := idx.latsBuf[:count]
 		lngs := idx.lngsBuf[:count]
 		r2 := idx.r2Buf[:count]
+		r3 := idx.r3Buf[:count]
 		r4 := idx.r4Buf[:count]
 		r6 := idx.r6Buf[:count]
 		r7 := idx.r7Buf[:count]
@@ -149,6 +154,7 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 			(*C.double)(unsafe.Pointer(&lngs[0])),
 			C.size_t(count),
 			(*C.uint64_t)(unsafe.Pointer(&r2[0])),
+			(*C.uint64_t)(unsafe.Pointer(&r3[0])),
 			(*C.uint64_t)(unsafe.Pointer(&r4[0])),
 			(*C.uint64_t)(unsafe.Pointer(&r6[0])),
 			(*C.uint64_t)(unsafe.Pointer(&r7[0])),
@@ -183,7 +189,7 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	// Exec Insertions / Updates
 	for i, e := range entities {
 		oldEntity, exists := idx.entities[e.ID]
-		newCells := [4]h3.Cell{h3.Cell(idx.r2Buf[i]), h3.Cell(idx.r4Buf[i]), h3.Cell(idx.r6Buf[i]), h3.Cell(idx.r7Buf[i])}
+		newCells := [5]h3.Cell{h3.Cell(idx.r2Buf[i]), h3.Cell(idx.r3Buf[i]), h3.Cell(idx.r4Buf[i]), h3.Cell(idx.r6Buf[i]), h3.Cell(idx.r7Buf[i])}
 		internalID := idx.getInternalID(e.ID)
 
 		if exists {
@@ -264,7 +270,7 @@ func (idx *Index) Query(vp entity.Viewport) ([]entity.Entity, map[string]entity.
 		viewportCellSetPool.Put(viewportCellSet)
 	}()
 
-	onlyClusters := vp.Zoom < 6
+	onlyClusters := vp.Zoom < 5
 
 	for _, vc := range viewportCells {
 		viewportCellSet[vc] = struct{}{}

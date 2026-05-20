@@ -82,10 +82,17 @@ var indexHTML = `<!DOCTYPE html>
         #status { position: absolute; bottom: 10px; left: 10px; background: rgba(0,0,0,0.7);
                   color: #fff; padding: 10px; border-radius: 4px; font-size: 12px; }
         .radar-blip {
-            background: rgba(255, 165, 0, 0.6);
-            border: 1px solid rgba(255, 165, 0, 0.9);
+            background: rgba(0, 255, 100, 0.6);
+            border: 1px solid rgba(0, 255, 100, 0.9);
             border-radius: 50%;
-            box-shadow: 0 0 4px rgba(255, 165, 0, 0.8);
+            box-shadow: 0 0 8px rgba(0, 255, 100, 0.8);
+            transition: all 0.3s ease;
+            animation: pulse 2s infinite ease-in-out;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 0.6; }
+            50% { transform: scale(1.1); opacity: 0.8; }
+            100% { transform: scale(1); opacity: 0.6; }
         }
     </style>
 </head>
@@ -186,8 +193,8 @@ var indexHTML = `<!DOCTYPE html>
                 delete(clusterMarkers[id]);
             }
             for (const [cellIdx, cluster] of Object.entries(delta.clusters || {})) {
-                // Calculate dynamic size
-                const size = Math.min(10 + (cluster.count / 5), 40);
+                // Calculate dynamic size based on density
+                const size = Math.min(8 + (cluster.count / 3), 35);
                 
                 // Use a divIcon to show radar blip
                 const clusterIcon = L.divIcon({
@@ -203,7 +210,6 @@ var indexHTML = `<!DOCTYPE html>
 
                 clusterMarkers[cellIdx] = clusterMarker;
             }
-
 
             entityCount = Object.keys(markers).length;
             clusterCount = Object.keys(clusterMarkers).length;

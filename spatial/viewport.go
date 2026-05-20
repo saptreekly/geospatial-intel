@@ -8,11 +8,11 @@ import (
 // ZoomToResolution maps viewport zoom level to H3 resolution.
 func ZoomToResolution(zoom int) int {
 	switch {
+	case zoom < 4:
+		return 3
 	case zoom < 5:
-		return 2
+		return 5
 	case zoom < 8:
-		return 4
-	case zoom < 11:
 		return 6
 	default:
 		return 7

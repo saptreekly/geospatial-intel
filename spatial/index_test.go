@@ -189,7 +189,7 @@ func TestQuery_Clusters(t *testing.T) {
 	e4 := createTestEntity("e4", 0.0003, 0.0003)
 	idx.BatchUpdateRust([]entity.Entity{e1, e2, e3, e4}, nil)
 
-	// Query at zoom 2 (cluster resolution)
+	// Query at zoom 0 (resolution 3) -> Should be clustered
 	vp := entity.Viewport{North: 1.0, South: -1.0, East: 1.0, West: -1.0, Zoom: 0}
 	_, clusters, _ := idx.Query(vp)
 
@@ -327,7 +327,7 @@ func TestQuery_ZoomTransition(t *testing.T) {
 		t.Errorf("Expected 1 visible entity, got %d", len(visibleIn))
 	}
 
-	// Zoomed out (Resolution 2) -> Clustered
+	// Zoomed out (Resolution 3) -> Clustered
 	vpOut := entity.Viewport{North: 90.0, South: -90.0, East: 180.0, West: -180.0, Zoom: 0}
 	visibleOut, clustersOut, _ := idx.Query(vpOut)
 	if len(visibleOut) != 0 {

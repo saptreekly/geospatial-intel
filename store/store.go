@@ -51,7 +51,7 @@ func NewStore() *Store {
 		panic(err)
 	}
 
-	_, err = db.Exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY;")
+	_, err = db.Exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = OFF; PRAGMA temp_store = MEMORY;")
 	if err != nil {
 		panic(err)
 	}
