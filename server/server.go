@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -41,6 +42,21 @@ func NewServer(addr string, s *store.Store, minPushInterval time.Duration) *Serv
 
 	mux.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
 		StreamHandler(context.Background(), w, r, hub, minPushInterval)
+	})
+
+	mux.HandleFunc("/api/history", func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Query().Get("id")
+		if id == "" {
+			http.Error(w, "missing id", http.StatusBadRequest)
+			return
+		}
+		history, err := s.GetHistory(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(history)
 	})
 
 	srv.Handler = mux

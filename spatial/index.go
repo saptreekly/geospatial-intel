@@ -33,18 +33,35 @@ type Index struct {
 	mu        sync.RWMutex
 	entities  map[string]entity.Entity
 	layers    map[int]map[h3.Cell]map[string]entity.Entity
+	globalCellCounts map[int]map[h3.Cell]int
 }
 
 // NewIndex creates a new spatial index.
 func NewIndex() *Index {
 	layers := make(map[int]map[h3.Cell]map[string]entity.Entity)
+	globalCellCounts := make(map[int]map[h3.Cell]int)
 	for _, res := range targetResolutions {
 		layers[res] = make(map[h3.Cell]map[string]entity.Entity)
+		globalCellCounts[res] = make(map[h3.Cell]int)
 	}
 	return &Index{
-		entities: make(map[string]entity.Entity),
-		layers:   layers,
+		entities:         make(map[string]entity.Entity),
+		layers:           layers,
+		globalCellCounts: globalCellCounts,
 	}
+}
+
+// getH3Cells computes H3 indices for all target resolutions for a given location.
+func (idx *Index) getH3Cells(lat, lng float64) map[int]h3.Cell {
+	cells := make(map[int]h3.Cell)
+	latLng := h3.LatLng{Lat: lat, Lng: lng}
+	for _, res := range targetResolutions {
+		cell, err := h3.LatLngToCell(latLng, res)
+		if err == nil {
+			cells[res] = cell
+		}
+	}
+	return cells
 }
 
 // BatchUpdateRust updates entities using the Rust spatial engine.
@@ -84,18 +101,19 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	// 1. Remove entities (existing Update logic for removal)
+	// 1. Remove entities
 	for _, id := range removed {
 		if oldEntity, ok := idx.entities[id]; ok {
-			latLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
-			for _, res := range targetResolutions {
-				cell, err := h3.LatLngToCell(latLng, res)
-				if err == nil {
-					if cellMap, found := idx.layers[res][cell]; found {
-						delete(cellMap, id)
-						if len(cellMap) == 0 {
-							delete(idx.layers[res], cell)
-						}
+			oldCells := idx.getH3Cells(oldEntity.Lat, oldEntity.Lng)
+			for res, cell := range oldCells {
+				idx.globalCellCounts[res][cell]--
+				if idx.globalCellCounts[res][cell] == 0 {
+					delete(idx.globalCellCounts[res], cell)
+				}
+				if cellMap, found := idx.layers[res][cell]; found {
+					delete(cellMap, id)
+					if len(cellMap) == 0 {
+						delete(idx.layers[res], cell)
 					}
 				}
 			}
@@ -107,15 +125,16 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	for i, e := range entities {
 		oldEntity, exists := idx.entities[e.ID]
 		if exists {
-			oldLatLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
-			for _, res := range targetResolutions {
-				oldCell, oldErr := h3.LatLngToCell(oldLatLng, res)
-				if oldErr == nil {
-					if cellMap, found := idx.layers[res][oldCell]; found {
-						delete(cellMap, e.ID)
-						if len(cellMap) == 0 {
-							delete(idx.layers[res], oldCell)
-						}
+			oldCells := idx.getH3Cells(oldEntity.Lat, oldEntity.Lng)
+			for res, cell := range oldCells {
+				idx.globalCellCounts[res][cell]--
+				if idx.globalCellCounts[res][cell] == 0 {
+					delete(idx.globalCellCounts[res], cell)
+				}
+				if cellMap, found := idx.layers[res][cell]; found {
+					delete(cellMap, e.ID)
+					if len(cellMap) == 0 {
+						delete(idx.layers[res], cell)
 					}
 				}
 			}
@@ -124,11 +143,12 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 		idx.entities[e.ID] = e
 
 		// Use H3 indices from Rust
-		cells := map[int]h3.Cell{2: h3.Cell(res2[i]), 4: h3.Cell(res4[i]), 6: h3.Cell(res6[i]), 7: h3.Cell(res7[i])}
-		for res, cell := range cells {
+		newCells := map[int]h3.Cell{2: h3.Cell(res2[i]), 4: h3.Cell(res4[i]), 6: h3.Cell(res6[i]), 7: h3.Cell(res7[i])}
+		for res, cell := range newCells {
 			if cell == 0 {
 				continue
 			}
+			idx.globalCellCounts[res][cell]++
 			if _, ok := idx.layers[res][cell]; !ok {
 				idx.layers[res][cell] = make(map[string]entity.Entity)
 			}
@@ -156,7 +176,12 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 	// Keep track of entities already added to visible or clusterCounts
 	processedEntities := make(map[string]struct{})
 
-	// Loop over the client's viewport cells - this is now O(viewport cells)
+	// 1. Loop over the client's viewport cells - this is now O(viewport cells)
+	viewportCellSet := make(map[h3.Cell]struct{})
+	for _, vc := range viewportCells {
+		viewportCellSet[vc] = struct{}{}
+	}
+
 	layer := idx.layers[queryResolution]
 	for _, viewCell := range viewportCells {
 		if entitiesInCell, found := layer[viewCell]; found {
@@ -175,24 +200,10 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 		}
 	}
 
-	// ALSO iterate over ALL indexed cells to find entities NOT in viewport to cluster them
-	for cell, entitiesInCell := range layer {
-		inViewport := false
-		for _, vc := range viewportCells {
-			if vc == cell {
-				inViewport = true
-				break
-			}
-		}
-
-		if !inViewport {
-			for _, e := range entitiesInCell {
-				if _, alreadyProcessed := processedEntities[e.ID]; alreadyProcessed {
-					continue
-				}
-				clusterCounts[cell]++
-				processedEntities[e.ID] = struct{}{}
-			}
+	// 2. ALSO iterate over ALL global cells to find entities NOT in viewport to cluster them
+	for cell, count := range idx.globalCellCounts[queryResolution] {
+		if _, inViewport := viewportCellSet[cell]; !inViewport {
+			clusterCounts[cell] += count
 		}
 	}
 

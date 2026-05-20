@@ -1,11 +1,13 @@
 package store
 
 import (
+	"database/sql"
 	"sync"
 	"sync/atomic"
 
 	"github.com/jackweekly/OSINT/entity"
 	"github.com/jackweekly/OSINT/spatial"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // StoreEvent is emitted when entities change.
@@ -18,21 +20,59 @@ type StoreEvent struct {
 // Store holds all entities, tracks changes, and manages subscriptions.
 type Store struct {
 	index *spatial.Index
+	db    *sql.DB
 
-	mu       sync.Mutex
-	seq      atomic.Uint64
-	lastSeen map[string]uint64              // entity ID → seq of last poll
-	subs     map[int]chan StoreEvent        // subscriber ID → channel
+	mu        sync.Mutex
+	seq       atomic.Uint64
+	lastSeen  map[string]uint64       // entity ID → seq of last poll
+	subs      map[int]chan StoreEvent // subscriber ID → channel
 	nextSubID int
 }
 
 // NewStore creates a new entity store.
 func NewStore() *Store {
-	return &Store{
-		index:    spatial.NewIndex(),
-		lastSeen: make(map[string]uint64),
-		subs:     make(map[int]chan StoreEvent),
+	db, err := sql.Open("sqlite3", "osint.db")
+	if err != nil {
+		panic(err)
 	}
+
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS history (
+		entity_id TEXT,
+		timestamp INTEGER,
+		lat REAL,
+		lng REAL,
+		PRIMARY KEY (entity_id, timestamp)
+	);
+	CREATE INDEX IF NOT EXISTS idx_history_entity_id_timestamp ON history (entity_id, timestamp DESC);`)
+	if err != nil {
+		panic(err)
+	}
+
+	return &Store{
+		index:     spatial.NewIndex(),
+		db:        db,
+		lastSeen:  make(map[string]uint64),
+		subs:      make(map[int]chan StoreEvent),
+	}
+}
+
+// recordHistory writes entity coordinates to the SQLite store.
+func (s *Store) recordHistory(entities []entity.Entity) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return
+	}
+	stmt, err := tx.Prepare("INSERT INTO history (entity_id, timestamp, lat, lng) VALUES (?, ?, ?, ?)")
+	if err != nil {
+		tx.Rollback()
+		return
+	}
+	defer stmt.Close()
+
+	for _, e := range entities {
+		_, err = stmt.Exec(e.ID, e.UpdatedAt, e.Lat, e.Lng)
+	}
+	tx.Commit()
 }
 
 // Apply ingests fresh entities from a seeder.
@@ -78,6 +118,9 @@ func (s *Store) Apply(entities []entity.Entity) {
 
 	// Update spatial index
 	s.index.BatchUpdateRust(append(added, updated...), removed)
+	
+	// Record history
+	go s.recordHistory(append(added, updated...))
 
 	// Emit event to all subscribers
 	event := StoreEvent{
@@ -140,4 +183,25 @@ func (s *Store) Query(vp entity.Viewport) (visible []entity.Entity, clusters map
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.index.Query(vp)
+}
+
+// GetHistory returns the last 100 coordinates for an entity.
+func (s *Store) GetHistory(id string) ([]entity.Entity, error) {
+	rows, err := s.db.Query("SELECT timestamp, lat, lng FROM history WHERE entity_id = ? ORDER BY timestamp DESC LIMIT 100", id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var history []entity.Entity
+	for rows.Next() {
+		var e entity.Entity
+		e.ID = id
+		err := rows.Scan(&e.UpdatedAt, &e.Lat, &e.Lng)
+		if err != nil {
+			return nil, err
+		}
+		history = append(history, e)
+	}
+	return history, nil
 }
