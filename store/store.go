@@ -10,6 +10,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/saptreekly/geospatial-intel/entity"
 	"github.com/saptreekly/geospatial-intel/spatial"
+	"github.com/saptreekly/geospatial-intel/util"
 )
 
 // StoreEvent is emitted when entities change.
@@ -90,13 +91,18 @@ func (s *Store) recordHistory(entities []entity.Entity) {
 	tx.Commit()
 
 	if time.Since(start) > 200*time.Millisecond {
-		log.Printf("CRITICAL: SQLite disk transaction slow: %v", time.Since(start))
+		msg := "CRITICAL: SQLite disk transaction slow: " + time.Since(start).String()
+		log.Printf("%s", msg)
+		util.LogPerformance(msg)
 	}
 }
 
 // Apply ingests fresh entities from a seeder.
 // Diffs against current state, emits StoreEvent to all subscribers.
 func (s *Store) Apply(entities []entity.Entity) {
+	start := time.Now()
+	defer util.LogIfSlow(start, 50*time.Millisecond, "Store.Apply")
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

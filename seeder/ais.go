@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/saptreekly/geospatial-intel/entity"
+	"github.com/saptreekly/geospatial-intel/util"
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
 )
@@ -40,6 +41,9 @@ func (s *AISSeeder) Interval() time.Duration {
 // For a persistent stream, this implementation connects, reads, and returns
 // the latest batch of entities available within a short timeout.
 func (s *AISSeeder) Fetch(ctx context.Context) ([]entity.Entity, error) {
+	start := time.Now()
+	defer util.LogIfSlow(start, 5*time.Second, "AISSeeder.Fetch")
+
 	if s.token == "" {
 		return nil, fmt.Errorf("AISSTREAM_TOKEN not set")
 	}

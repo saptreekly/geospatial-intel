@@ -36,6 +36,11 @@ Thumbs.db
 *.db-journal
 *.db-wal
 
+# Performance logs
+performance_logs.md
+
 # Local env
 .env
 .env.local
+.gitignore
+.gitignore

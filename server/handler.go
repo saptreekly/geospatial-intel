@@ -7,12 +7,16 @@ import (
 	"time"
 
 	"github.com/saptreekly/geospatial-intel/entity"
+	"github.com/saptreekly/geospatial-intel/util"
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
 )
 
 // StreamHandler handles a WebSocket /stream connection.
 func StreamHandler(ctx context.Context, w http.ResponseWriter, r *http.Request, h *Hub, minPushInterval time.Duration) {
+	start := time.Now()
+	defer util.LogIfSlow(start, 500*time.Millisecond, "StreamHandler (Connection Duration)")
+
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{})
 	if err != nil {
 		log.Printf("WebSocket accept error: %v", err)

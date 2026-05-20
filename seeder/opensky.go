@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/saptreekly/geospatial-intel/entity"
+	"github.com/saptreekly/geospatial-intel/util"
 	"github.com/tidwall/gjson"
 )
 
@@ -63,6 +64,9 @@ func (s *OpenSkySeeder) Interval() time.Duration {
 // 9: velocity (ground speed)
 // 10: heading
 func (s *OpenSkySeeder) Fetch(ctx context.Context) ([]entity.Entity, error) {
+	start := time.Now()
+	defer util.LogIfSlow(start, 5*time.Second, "OpenSkySeeder.Fetch")
+
 	req, err := http.NewRequestWithContext(ctx, "GET", openSkyURL, nil)
 	if err != nil {
 		return nil, err

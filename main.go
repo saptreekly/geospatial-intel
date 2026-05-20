@@ -15,9 +15,11 @@ import (
 	"github.com/saptreekly/geospatial-intel/seeder"
 	"github.com/saptreekly/geospatial-intel/server"
 	"github.com/saptreekly/geospatial-intel/store"
+	"github.com/saptreekly/geospatial-intel/util"
 )
 
 func main() {
+	util.InitPerfLogger("performance_logs.md")
 	// Parse environment variables
 	port := os.Getenv("PORT")
 	if port == "" {

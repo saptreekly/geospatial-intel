@@ -2,11 +2,13 @@ package server
 
 import (
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/saptreekly/geospatial-intel/entity"
 	"github.com/saptreekly/geospatial-intel/store"
+	"github.com/saptreekly/geospatial-intel/util"
 )
 
 // Client represents a connected WebSocket client.
@@ -96,7 +98,9 @@ func (h *Hub) broadcast() {
 
 		elapsed := time.Since(start)
 		if elapsed > 50*time.Millisecond {
-			log.Printf("WARNING: Broadcast loop slow: %v, clients swept: %d, total delta entities: %d", elapsed, clientsSwept, totalDeltaPayloadSize)
+			msg := "WARNING: Broadcast loop slow: " + elapsed.String() + ", clients swept: " + strconv.Itoa(clientsSwept) + ", total delta entities: " + strconv.Itoa(totalDeltaPayloadSize)
+			log.Printf("%s", msg)
+			util.LogPerformance(msg)
 		}
 	}
 }

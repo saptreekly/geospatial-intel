@@ -19,9 +19,11 @@ import "C"
 
 import (
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/saptreekly/geospatial-intel/entity"
+	"github.com/saptreekly/geospatial-intel/util"
 	"github.com/uber/h3-go/v4"
 )
 
@@ -66,6 +68,9 @@ func (idx *Index) getH3Cells(lat, lng float64) map[int]h3.Cell {
 
 // BatchUpdateRust updates entities using the Rust spatial engine.
 func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
+	start := time.Now()
+	defer util.LogIfSlow(start, 50*time.Millisecond, "BatchUpdateRust")
+
 	if len(entities) == 0 && len(removed) == 0 {
 		return
 	}
@@ -164,6 +169,9 @@ func (idx *Index) insertEntitiesLocked(entities []entity.Entity, res2, res4, res
 
 // Query returns entities visible in the viewport and cluster counts for surrounding areas.
 func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters map[string]entity.Cluster, err error) {
+	start := time.Now()
+	defer util.LogIfSlow(start, 10*time.Millisecond, "Query")
+
 	queryResolution := ZoomToResolution(vp.Zoom)
 	viewportCells, err := ViewportToCells(vp, queryResolution)
 	if err != nil {
