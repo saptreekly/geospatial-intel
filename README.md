@@ -1,4 +1,5 @@
 # Geospatial Real-Time Data Server
+![Built with Go](https://img.shields.io/badge/Built%20with-Go-blue)
 
 A high-performance Go server that streams real-time geospatial data (aircraft positions from OpenSky Network) to WebSocket clients, filtering by viewport and using H3 hexagonal binning for efficient spatial indexing.
 
