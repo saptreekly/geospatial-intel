@@ -49,16 +49,17 @@ func NewIndex() *Index {
 		layers[res] = make(map[h3.Cell]map[string]entity.Entity)
 		globalCellCounts[res] = make(map[h3.Cell]int)
 	}
+	initialCap := 100000
 	return &Index{
 		entities:         make(map[string]entity.Entity),
 		layers:           layers,
 		globalCellCounts: globalCellCounts,
-		latsBuf:          make([]float64, 0, 1024),
-		lngsBuf:          make([]float64, 0, 1024),
-		res2Buf:          make([]uint64, 0, 1024),
-		res4Buf:          make([]uint64, 0, 1024),
-		res6Buf:          make([]uint64, 0, 1024),
-		res7Buf:          make([]uint64, 0, 1024),
+		latsBuf:          make([]float64, 0, initialCap),
+		lngsBuf:          make([]float64, 0, initialCap),
+		res2Buf:          make([]uint64, 0, initialCap),
+		res4Buf:          make([]uint64, 0, initialCap),
+		res6Buf:          make([]uint64, 0, initialCap),
+		res7Buf:          make([]uint64, 0, initialCap),
 	}
 }
 
@@ -134,16 +135,19 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 func (idx *Index) removeEntitiesLocked(removed []string) {
 	for _, id := range removed {
 		if oldEntity, ok := idx.entities[id]; ok {
-			oldCells := idx.getH3Cells(oldEntity.Lat, oldEntity.Lng)
-			for res, cell := range oldCells {
-				idx.globalCellCounts[res][cell]--
-				if idx.globalCellCounts[res][cell] == 0 {
-					delete(idx.globalCellCounts[res], cell)
-				}
-				if cellMap, found := idx.layers[res][cell]; found {
-					delete(cellMap, id)
-					if len(cellMap) == 0 {
-						delete(idx.layers[res], cell)
+			latLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
+			for _, res := range targetResolutions {
+				cell, err := h3.LatLngToCell(latLng, res)
+				if err == nil {
+					idx.globalCellCounts[res][cell]--
+					if idx.globalCellCounts[res][cell] == 0 {
+						delete(idx.globalCellCounts[res], cell)
+					}
+					if cellMap, found := idx.layers[res][cell]; found {
+						delete(cellMap, id)
+						if len(cellMap) == 0 {
+							delete(idx.layers[res], cell)
+						}
 					}
 				}
 			}
@@ -156,16 +160,19 @@ func (idx *Index) insertEntitiesLocked(entities []entity.Entity, res2, res4, res
 	for i, e := range entities {
 		oldEntity, exists := idx.entities[e.ID]
 		if exists {
-			oldCells := idx.getH3Cells(oldEntity.Lat, oldEntity.Lng)
-			for res, cell := range oldCells {
-				idx.globalCellCounts[res][cell]--
-				if idx.globalCellCounts[res][cell] == 0 {
-					delete(idx.globalCellCounts[res], cell)
-				}
-				if cellMap, found := idx.layers[res][cell]; found {
-					delete(cellMap, e.ID)
-					if len(cellMap) == 0 {
-						delete(idx.layers[res], cell)
+			latLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
+			for _, res := range targetResolutions {
+				oldCell, oldErr := h3.LatLngToCell(latLng, res)
+				if oldErr == nil {
+					idx.globalCellCounts[res][oldCell]--
+					if idx.globalCellCounts[res][oldCell] == 0 {
+						delete(idx.globalCellCounts[res], oldCell)
+					}
+					if cellMap, found := idx.layers[res][oldCell]; found {
+						delete(cellMap, e.ID)
+						if len(cellMap) == 0 {
+							delete(idx.layers[res], oldCell)
+						}
 					}
 				}
 			}
@@ -174,8 +181,9 @@ func (idx *Index) insertEntitiesLocked(entities []entity.Entity, res2, res4, res
 		idx.entities[e.ID] = e
 
 		// Use H3 indices from Rust
-		newCells := map[int]h3.Cell{2: h3.Cell(res2[i]), 4: h3.Cell(res4[i]), 6: h3.Cell(res6[i]), 7: h3.Cell(res7[i])}
-		for res, cell := range newCells {
+		newCells := [4]h3.Cell{h3.Cell(res2[i]), h3.Cell(res4[i]), h3.Cell(res6[i]), h3.Cell(res7[i])}
+		for j, res := range targetResolutions {
+			cell := newCells[j]
 			if cell == 0 {
 				continue
 			}
