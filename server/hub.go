@@ -14,10 +14,25 @@ import (
 // Client represents a connected WebSocket client.
 type Client struct {
 	ch              chan entity.Delta
+	viewportMu      sync.RWMutex
 	viewport        entity.Viewport
 	seen            map[string]uint64 // entity ID → version last sent to client
 	lastPush        time.Time
 	minPushInterval time.Duration
+}
+
+// SetViewport safely updates the client's viewport.
+func (c *Client) SetViewport(vp entity.Viewport) {
+	c.viewportMu.Lock()
+	defer c.viewportMu.Unlock()
+	c.viewport = vp
+}
+
+// GetViewport safely retrieves the client's current viewport.
+func (c *Client) GetViewport() entity.Viewport {
+	c.viewportMu.RLock()
+	defer c.viewportMu.RUnlock()
+	return c.viewport
 }
 
 // Hub manages all connected clients and broadcasts events.
@@ -107,7 +122,7 @@ func (h *Hub) broadcast() {
 
 func (h *Hub) processClientDelta(c *Client, event store.StoreEvent) (bool, int) {
 	// Compute delta for this client
-	visible, clusters, err := h.store.Query(c.viewport)
+	visible, clusters, err := h.store.Query(c.GetViewport())
 	if err != nil {
 		return false, 0
 	}
