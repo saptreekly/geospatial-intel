@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       LD_LIBRARY_PATH: ${{ github.workspace }}/spatial_engine/target/release
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -17,7 +18,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.80.0
+          toolchain: 1.85.0
 
       - name: Set up Go
         uses: actions/setup-go@v5
