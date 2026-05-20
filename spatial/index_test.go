@@ -11,6 +11,8 @@ func createTestEntity(id string, lat, lng float64) entity.Entity {
 	return entity.Entity{ID: id, Lat: lat, Lng: lng, Source: "test"}
 }
 
+const indexingResolution = 7
+
 // TestNewIndex tests the NewIndex function
 func TestNewIndex(t *testing.T) {
 	idx := NewIndex()
@@ -20,8 +22,8 @@ func TestNewIndex(t *testing.T) {
 	if idx.entities == nil {
 		t.Error("NewIndex did not initialize entities map")
 	}
-	if idx.cellIndex == nil {
-		t.Error("NewIndex did not initialize cellIndex map")
+	if idx.layers == nil {
+		t.Error("NewIndex did not initialize layers map")
 	}
 }
 
@@ -46,17 +48,17 @@ func TestUpdate_Add(t *testing.T) {
 	h3e1, _ := h3.LatLngToCell(h3.LatLng{Lat: e1.Lat, Lng: e1.Lng}, indexingResolution)
 	h3e2, _ := h3.LatLngToCell(h3.LatLng{Lat: e2.Lat, Lng: e2.Lng}, indexingResolution)
 
-	if len(idx.cellIndex[h3e1]) != 1 {
-		t.Errorf("Expected 1 entity in h3e1 cell, got %d", len(idx.cellIndex[h3e1]))
+	if len(idx.layers[indexingResolution][h3e1]) != 1 {
+		t.Errorf("Expected 1 entity in h3e1 cell, got %d", len(idx.layers[indexingResolution][h3e1]))
 	}
-	if _, ok := idx.cellIndex[h3e1][e1.ID]; !ok {
-		t.Errorf("Entity %s not found in cellIndex for h3e1", e1.ID)
+	if _, ok := idx.layers[indexingResolution][h3e1][e1.ID]; !ok {
+		t.Errorf("Entity %s not found in layers[7] for h3e1", e1.ID)
 	}
-	if len(idx.cellIndex[h3e2]) != 1 {
-		t.Errorf("Expected 1 entity in h3e2 cell, got %d", len(idx.cellIndex[h3e2]))
+	if len(idx.layers[indexingResolution][h3e2]) != 1 {
+		t.Errorf("Expected 1 entity in h3e2 cell, got %d", len(idx.layers[indexingResolution][h3e2]))
 	}
-	if _, ok := idx.cellIndex[h3e2][e2.ID]; !ok {
-		t.Errorf("Entity %s not found in cellIndex for h3e2", e2.ID)
+	if _, ok := idx.layers[indexingResolution][h3e2][e2.ID]; !ok {
+		t.Errorf("Entity %s not found in layers[7] for h3e2", e2.ID)
 	}
 }
 
@@ -82,16 +84,16 @@ func TestUpdate_Update(t *testing.T) {
 
 	// If cell changed, old cell should be empty
 	if oldH3e1 != newH3e1 {
-		if _, found := idx.cellIndex[oldH3e1]; found {
+		if _, found := idx.layers[indexingResolution][oldH3e1]; found {
 			t.Errorf("Old H3 cell %d for e1 should be empty", oldH3e1)
 		}
 	}
 	
-	if len(idx.cellIndex[newH3e1]) != 1 {
-		t.Errorf("Expected 1 entity in new H3 cell %d, got %d", newH3e1, len(idx.cellIndex[newH3e1]))
+	if len(idx.layers[indexingResolution][newH3e1]) != 1 {
+		t.Errorf("Expected 1 entity in new H3 cell %d, got %d", newH3e1, len(idx.layers[indexingResolution][newH3e1]))
 	}
-	if _, ok := idx.cellIndex[newH3e1][e1Updated.ID]; !ok {
-		t.Errorf("Updated entity %s not found in cellIndex for new H3 cell", e1Updated.ID)
+	if _, ok := idx.layers[indexingResolution][newH3e1][e1Updated.ID]; !ok {
+		t.Errorf("Updated entity %s not found in layers[7] for new H3 cell", e1Updated.ID)
 	}
 }
 
@@ -115,12 +117,12 @@ func TestUpdate_Remove(t *testing.T) {
 	}
 
 	h3e1, _ := h3.LatLngToCell(h3.LatLng{Lat: e1.Lat, Lng: e1.Lng}, indexingResolution)
-	if _, found := idx.cellIndex[h3e1]; found {
+	if _, found := idx.layers[indexingResolution][h3e1]; found {
 		t.Errorf("Old H3 cell %d for e1 should be empty after removal", h3e1)
 	}
 	h3e2, _ := h3.LatLngToCell(h3.LatLng{Lat: e2.Lat, Lng: e2.Lng}, indexingResolution)
-	if len(idx.cellIndex[h3e2]) != 1 {
-		t.Errorf("Expected 1 entity in h3e2 cell after removal of e1, got %d", len(idx.cellIndex[h3e2]))
+	if len(idx.layers[indexingResolution][h3e2]) != 1 {
+		t.Errorf("Expected 1 entity in h3e2 cell after removal of e1, got %d", len(idx.layers[indexingResolution][h3e2]))
 	}
 }
 
@@ -294,11 +296,11 @@ func TestUpdate_NoCellChange(t *testing.T) {
 	}
 
 	h3e1, _ := h3.LatLngToCell(h3.LatLng{Lat: e1.Lat, Lng: e1.Lng}, indexingResolution)
-	if len(idx.cellIndex[h3e1]) != 1 {
-		t.Errorf("Expected 1 entity in H3 cell %d, got %d", h3e1, len(idx.cellIndex[h3e1]))
+	if len(idx.layers[indexingResolution][h3e1]) != 1 {
+		t.Errorf("Expected 1 entity in H3 cell %d, got %d", h3e1, len(idx.layers[indexingResolution][h3e1]))
 	}
-	if idx.cellIndex[h3e1][e1Updated.ID].Source != "updated_test" {
-		t.Errorf("Entity source in cellIndex not updated")
+	if idx.layers[indexingResolution][h3e1][e1Updated.ID].Source != "updated_test" {
+		t.Errorf("Entity source in layers[7] not updated")
 	}
 }
 

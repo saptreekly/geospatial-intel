@@ -7,20 +7,25 @@ import (
 	"github.com/uber/h3-go/v4"
 )
 
-const indexingResolution = 7 // A reasonable default H3 resolution for indexing entities
+// Pre-computed lookup per required zoom resolution layer
+var targetResolutions = []int{2, 4, 6, 7}
 
 // Index is a thread-safe spatial index using H3.
 type Index struct {
 	mu        sync.RWMutex
-	entities  map[string]entity.Entity              // entity ID → entity
-	cellIndex map[h3.Cell]map[string]entity.Entity // h3 cell → (entity ID → entity)
+	entities  map[string]entity.Entity
+	layers    map[int]map[h3.Cell]map[string]entity.Entity
 }
 
 // NewIndex creates a new spatial index.
 func NewIndex() *Index {
+	layers := make(map[int]map[h3.Cell]map[string]entity.Entity)
+	for _, res := range targetResolutions {
+		layers[res] = make(map[h3.Cell]map[string]entity.Entity)
+	}
 	return &Index{
-		entities:  make(map[string]entity.Entity),
-		cellIndex: make(map[h3.Cell]map[string]entity.Entity),
+		entities: make(map[string]entity.Entity),
+		layers:   layers,
 	}
 }
 
@@ -32,13 +37,16 @@ func (idx *Index) Update(entities []entity.Entity, removed []string) {
 	// 1. Remove entities
 	for _, id := range removed {
 		if oldEntity, ok := idx.entities[id]; ok {
-			// Remove from cellIndex
-			oldH3Cell, err := h3.LatLngToCell(h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}, indexingResolution)
-			if err == nil {
-				if cellMap, found := idx.cellIndex[oldH3Cell]; found {
-					delete(cellMap, id)
-					if len(cellMap) == 0 {
-						delete(idx.cellIndex, oldH3Cell)
+			// Remove from all layers
+			latLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
+			for _, res := range targetResolutions {
+				cell, err := h3.LatLngToCell(latLng, res)
+				if err == nil {
+					if cellMap, found := idx.layers[res][cell]; found {
+						delete(cellMap, id)
+						if len(cellMap) == 0 {
+							delete(idx.layers[res], cell)
+						}
 					}
 				}
 			}
@@ -50,21 +58,19 @@ func (idx *Index) Update(entities []entity.Entity, removed []string) {
 	// 2. Add or update entities
 	for _, e := range entities {
 		oldEntity, exists := idx.entities[e.ID]
-		newH3Cell, err := h3.LatLngToCell(h3.LatLng{Lat: e.Lat, Lng: e.Lng}, indexingResolution)
-		if err != nil {
-			// Log error or handle gracefully if entity cannot be mapped to H3 cell
-			continue
-		}
+		latLng := h3.LatLng{Lat: e.Lat, Lng: e.Lng}
 
 		if exists {
-			// If entity existed, check if its H3 cell changed
-			oldH3Cell, oldErr := h3.LatLngToCell(h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}, indexingResolution)
-			if oldErr == nil && oldH3Cell != newH3Cell {
-				// Remove from old cell in cellIndex
-				if cellMap, found := idx.cellIndex[oldH3Cell]; found {
-					delete(cellMap, e.ID)
-					if len(cellMap) == 0 {
-						delete(idx.cellIndex, oldH3Cell)
+			// If entity existed, remove from all layers
+			oldLatLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
+			for _, res := range targetResolutions {
+				oldCell, oldErr := h3.LatLngToCell(oldLatLng, res)
+				if oldErr == nil {
+					if cellMap, found := idx.layers[res][oldCell]; found {
+						delete(cellMap, e.ID)
+						if len(cellMap) == 0 {
+							delete(idx.layers[res], oldCell)
+						}
 					}
 				}
 			}
@@ -73,11 +79,17 @@ func (idx *Index) Update(entities []entity.Entity, removed []string) {
 		// Add/update in entities map
 		idx.entities[e.ID] = e
 
-		// Add/update in cellIndex
-		if _, ok := idx.cellIndex[newH3Cell]; !ok {
-			idx.cellIndex[newH3Cell] = make(map[string]entity.Entity)
+		// Add/update in all layers
+		for _, res := range targetResolutions {
+			newCell, err := h3.LatLngToCell(latLng, res)
+			if err != nil {
+				continue
+			}
+			if _, ok := idx.layers[res][newCell]; !ok {
+				idx.layers[res][newCell] = make(map[string]entity.Entity)
+			}
+			idx.layers[res][newCell][e.ID] = e
 		}
-		idx.cellIndex[newH3Cell][e.ID] = e
 	}
 }
 
@@ -100,79 +112,41 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 	// Keep track of entities already added to visible or clusterCounts
 	processedEntities := make(map[string]struct{})
 
-	// Loop over the client's viewport cells instead of the global map
+	// Loop over the client's viewport cells - this is now O(viewport cells)
+	layer := idx.layers[queryResolution]
 	for _, viewCell := range viewportCells {
-		var cellsToIndex []h3.Cell
-		if queryResolution == indexingResolution {
-			cellsToIndex = []h3.Cell{viewCell}
-		} else { // queryResolution < indexingResolution (zoomed out)
-			children, h3Err := viewCell.Children(indexingResolution)
-			if h3Err != nil {
-				// Handle error, e.g., continue to next viewCell
-				continue
-			}
-			cellsToIndex = children
-		}
-
-		for _, cell := range cellsToIndex {
-			if entitiesInCell, found := idx.cellIndex[cell]; found {
-				for _, e := range entitiesInCell {
-					if _, alreadyProcessed := processedEntities[e.ID]; alreadyProcessed {
-						continue // Avoid processing same entity multiple times if children overlap
-					}
-
-					// Re-calculate the cell of entity at query resolution to check viewport membership
-					entityQueryCell, h3Err := h3.LatLngToCell(h3.LatLng{Lat: e.Lat, Lng: e.Lng}, queryResolution)
-					if h3Err != nil {
-						continue
-					}
-
-					// Verify if entityQueryCell matches one of the viewportCells
-					inViewport := false
-					for _, vc := range viewportCells {
-						if vc == entityQueryCell {
-							inViewport = true
-							break
-						}
-					}
-
-					if inViewport && !onlyClusters {
-						visible = append(visible, e)
-					}
-					
-					// ALWAYS cluster if onlyClusters is true OR if entity is NOT in viewport
-					if onlyClusters || !inViewport {
-						if entityQueryCell != 0 {
-							clusterCounts[entityQueryCell]++
-						}
-					}
-					processedEntities[e.ID] = struct{}{} // Mark as processed
+		if entitiesInCell, found := layer[viewCell]; found {
+			for _, e := range entitiesInCell {
+				if _, alreadyProcessed := processedEntities[e.ID]; alreadyProcessed {
+					continue
 				}
+
+				if !onlyClusters {
+					visible = append(visible, e)
+				} else {
+					clusterCounts[viewCell]++
+				}
+				processedEntities[e.ID] = struct{}{}
 			}
 		}
 	}
 
 	// ALSO iterate over ALL indexed cells to find entities NOT in viewport to cluster them
-	for indexedCell, entitiesInCell := range idx.cellIndex {
-		entityQueryCell, _ := indexedCell.Parent(queryResolution)
-		
+	for cell, entitiesInCell := range layer {
 		inViewport := false
 		for _, vc := range viewportCells {
-			if vc == entityQueryCell {
+			if vc == cell {
 				inViewport = true
 				break
 			}
 		}
-		
+
 		if !inViewport {
 			for _, e := range entitiesInCell {
 				if _, alreadyProcessed := processedEntities[e.ID]; alreadyProcessed {
 					continue
 				}
-				clusterCell, h3Err := h3.LatLngToCell(h3.LatLng{Lat: e.Lat, Lng: e.Lng}, queryResolution)
-				if h3Err == nil && clusterCell != 0 {
-					clusterCounts[clusterCell]++
-				}
+				clusterCounts[cell]++
 				processedEntities[e.ID] = struct{}{}
 			}
 		}
@@ -181,7 +155,6 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 	// Convert cluster cells to entity.Cluster with centroids
 	clusters = make(map[string]entity.Cluster)
 	for cell, count := range clusterCounts {
-		// Determine if this cell is within the viewport
 		inViewport := false
 		for _, vc := range viewportCells {
 			if vc == cell {
@@ -213,7 +186,6 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 			}
 		}
 	}
-
 
 	return visible, clusters, nil
 }
