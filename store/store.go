@@ -46,7 +46,7 @@ type Store struct {
 }
 
 func NewStore() *Store {
-	db, err := sql.Open("sqlite3", "osint.db?_journal_mode=WAL&_synchronous=OFF&_temp_store=MEMORY")
+	db, err := sql.Open("sqlite3", "file:osint.db?cache=shared&mode=rwc&_journal=WAL&_sync=0")
 	if err != nil {
 		panic(err)
 	}
