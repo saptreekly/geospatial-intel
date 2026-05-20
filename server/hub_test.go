@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"github.com/saptreekly/geospatial-intel/entity"
 	"github.com/saptreekly/geospatial-intel/store"
 	"testing"
@@ -23,7 +24,11 @@ func TestHub_BroadcastOptimization(t *testing.T) {
 
 	// Wait for broadcast
 	select {
-	case delta := <-client.ch:
+	case deltaBytes := <-client.ch:
+		var delta entity.Delta
+		if err := json.Unmarshal(deltaBytes, &delta); err != nil {
+			t.Fatalf("Failed to unmarshal delta: %v", err)
+		}
 		if len(delta.Added) != 1 || delta.Added[0].ID != "e1" {
 			t.Errorf("Expected delta.Added to contain e1, got %+v", delta.Added)
 		}

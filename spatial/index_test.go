@@ -55,8 +55,8 @@ func TestUpdate_Add(t *testing.T) {
 	}
 	
 	foundE1 := false
-	for _, id := range idx.layers[indexingResolution][h3e1] {
-		if id == e1.ID {
+	for _, internalID := range idx.layers[indexingResolution][h3e1] {
+		if idx.idToEntityID[internalID] == e1.ID {
 			foundE1 = true
 			break
 		}
@@ -69,8 +69,8 @@ func TestUpdate_Add(t *testing.T) {
 		t.Errorf("Expected 1 entity in h3e2 cell, got %d", len(idx.layers[indexingResolution][h3e2]))
 	}
 	foundE2 := false
-	for _, id := range idx.layers[indexingResolution][h3e2] {
-		if id == e2.ID {
+	for _, internalID := range idx.layers[indexingResolution][h3e2] {
+		if idx.idToEntityID[internalID] == e2.ID {
 			foundE2 = true
 			break
 		}
@@ -113,8 +113,8 @@ func TestUpdate_Update(t *testing.T) {
 		t.Errorf("Expected 1 entity in new H3 cell %d, got %d", newH3e1, len(idx.layers[indexingResolution][newH3e1]))
 	}
 	foundUpdated := false
-	for _, id := range idx.layers[indexingResolution][newH3e1] {
-		if id == e1Updated.ID {
+	for _, internalID := range idx.layers[indexingResolution][newH3e1] {
+		if idx.idToEntityID[internalID] == e1Updated.ID {
 			foundUpdated = true
 			break
 		}
@@ -274,8 +274,8 @@ func TestUpdate_NoCellChange(t *testing.T) {
 		t.Errorf("Expected 1 entity in H3 cell %d, got %d", h3e1, len(idx.layers[indexingResolution][h3e1]))
 	}
 	found := false
-	for _, id := range idx.layers[indexingResolution][h3e1] {
-		if id == e1Updated.ID {
+	for _, internalID := range idx.layers[indexingResolution][h3e1] {
+		if idx.idToEntityID[internalID] == e1Updated.ID {
 			found = true
 			break
 		}

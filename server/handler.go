@@ -60,11 +60,11 @@ func StreamHandler(ctx context.Context, w http.ResponseWriter, r *http.Request, 
 				return
 			}
 			client.SetViewport(vp)
-		case delta, ok := <-client.ch:
+		case deltaBytes, ok := <-client.ch:
 			if !ok {
 				return
 			}
-			if err := wsjson.Write(ctx, c, delta); err != nil {
+			if err := c.Write(ctx, websocket.MessageText, deltaBytes); err != nil {
 				return
 			}
 		}

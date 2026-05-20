@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"log"
 	"strconv"
 	"sync"
@@ -13,7 +14,7 @@ import (
 
 // Client represents a connected WebSocket client.
 type Client struct {
-	ch              chan entity.Delta
+	ch              chan []byte
 	viewportMu      sync.RWMutex
 	viewport        entity.Viewport
 	seen            map[string]uint64 // entity ID → version last sent to client
@@ -68,7 +69,7 @@ func NewHub(s *store.Store) *Hub {
 // NewClient creates a new client connection.
 func NewClient(minPushInterval time.Duration) *Client {
 	return &Client{
-		ch:              make(chan entity.Delta, 1),
+		ch:              make(chan []byte, 1),
 		seen:            make(map[string]uint64),
 		minPushInterval: minPushInterval,
 	}
@@ -188,17 +189,21 @@ func (h *Hub) computeAndSend(c *Client, event store.StoreEvent, visible []entity
 		return false, 0
 	}
 
+	deltaBytes, err := json.Marshal(delta)
 	payloadSize := len(delta.Added) + len(delta.Updated) + len(delta.Removed) + len(delta.Clusters)
+	deltaPool.Put(delta)
+
+	if err != nil {
+		return false, 0
+	}
 
 	// Send delta
 	select {
-	case c.ch <- *delta:
+	case c.ch <- deltaBytes:
 		c.lastPush = time.Now()
-		deltaPool.Put(delta)
 		return true, payloadSize
 	default:
 		// Client ch is full; skip this update
-		deltaPool.Put(delta)
 		return false, 0
 	}
 }

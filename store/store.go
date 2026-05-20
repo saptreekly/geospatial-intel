@@ -37,6 +37,12 @@ type Store struct {
 	subs        map[int]chan StoreEvent
 	nextSubID   int
 	historyChan chan []entity.Entity
+
+	// Persistent scratchpad buffers
+	addedBuf    []entity.Entity
+	updatedBuf  []entity.Entity
+	removedBuf  []string
+	seenIDsBuf  map[string]struct{}
 }
 
 func NewStore() *Store {
@@ -63,6 +69,10 @@ func NewStore() *Store {
 		lastSeen:    make(map[string]uint64),
 		subs:        make(map[int]chan StoreEvent),
 		historyChan: make(chan []entity.Entity, 100),
+		addedBuf:    make([]entity.Entity, 0, 5000),
+		updatedBuf:  make([]entity.Entity, 0, 5000),
+		removedBuf:  make([]string, 0, 5000),
+		seenIDsBuf:  make(map[string]struct{}, 5000),
 	}
 	go s.historyWorker()
 	return s
@@ -122,55 +132,65 @@ func (s *Store) Apply(entities []entity.Entity) {
 	defer util.LogIfSlow(start, 50*time.Millisecond, "Store.Apply")
 
 	s.mu.Lock()
+	defer s.mu.Unlock() // Hold lock for the whole tick
+
 	seq := s.seq.Add(1)
 
-	added := []entity.Entity{}
-	updated := []entity.Entity{}
-	seenIDs := make(map[string]struct{})
+	// Reset buffers
+	s.addedBuf = s.addedBuf[:0]
+	s.updatedBuf = s.updatedBuf[:0]
+	s.removedBuf = s.removedBuf[:0]
+	for k := range s.seenIDsBuf {
+		delete(s.seenIDsBuf, k)
+	}
 
 	for _, e := range entities {
 		e.Version = seq
-		seenIDs[e.ID] = struct{}{}
+		s.seenIDsBuf[e.ID] = struct{}{}
 
 		if _, seen := s.lastSeen[e.ID]; !seen {
-			added = append(added, e)
+			s.addedBuf = append(s.addedBuf, e)
 		} else {
-			updated = append(updated, e)
+			s.updatedBuf = append(s.updatedBuf, e)
 		}
 		s.lastSeen[e.ID] = seq
 	}
 
-	removed := []string{}
 	for id, lastSeq := range s.lastSeen {
-		if _, present := seenIDs[id]; !present {
+		if _, present := s.seenIDsBuf[id]; !present {
 			if lastSeq < seq-1 {
-				removed = append(removed, id)
+				s.removedBuf = append(s.removedBuf, id)
 				delete(s.lastSeen, id)
 			} else {
 				s.lastSeen[id] = seq - 2
 			}
 		}
 	}
-	s.mu.Unlock()
 
-	// Pure isolated background FFI computation
-	s.index.BatchUpdateRust(append(added, updated...), removed)
+	// Prepare data for background workers
+	totalChanges := len(s.addedBuf) + len(s.updatedBuf)
+	combined := make([]entity.Entity, totalChanges)
+	copy(combined, s.addedBuf)
+	copy(combined[len(s.addedBuf):], s.updatedBuf)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	
+	// Pure isolated background FFI computation (requires index lock internally)
+	s.index.BatchUpdateRust(combined, s.removedBuf)
+
+	// Background history
 	select {
-	case s.historyChan <- append(added, updated...):
+	case s.historyChan <- combined:
 	default:
 	}
 
+	// Subscriptions
 	event := StoreEvent{
 		Seq:     seq,
-		Changed: make([]string, 0, len(added)+len(updated)),
-		Removed: removed,
+		Changed: make([]string, totalChanges),
+		Removed: make([]string, len(s.removedBuf)),
 	}
-	for _, e := range added { event.Changed = append(event.Changed, e.ID) }
-	for _, e := range updated { event.Changed = append(event.Changed, e.ID) }
+	for i, e := range s.addedBuf { event.Changed[i] = e.ID }
+	for i, e := range s.updatedBuf { event.Changed[len(s.addedBuf)+i] = e.ID }
+	copy(event.Removed, s.removedBuf)
 
 	for _, ch := range s.subs {
 		select {

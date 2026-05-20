@@ -39,9 +39,14 @@ var (
 type Index struct {
 	mu                sync.RWMutex
 	entities          map[string]entity.Entity
-	layers            map[int]map[h3.Cell][]string
+	layers            map[int]map[h3.Cell][]uint32
 	globalCellCounts  map[int]map[h3.Cell]int
 	totalGlobalCounts map[int]int
+	
+	idCounter           uint32
+	entityIDToInternalID map[string]uint32
+	idToEntityID        map[uint32]string
+
 	latsBuf           []float64
 	lngsBuf           []float64
 	r2Buf             []uint64
@@ -51,11 +56,11 @@ type Index struct {
 }
 
 func NewIndex() *Index {
-	layers := make(map[int]map[h3.Cell][]string)
+	layers := make(map[int]map[h3.Cell][]uint32)
 	globalCellCounts := make(map[int]map[h3.Cell]int)
 	totalGlobalCounts := make(map[int]int)
 	for _, res := range targetResolutions {
-		layers[res] = make(map[h3.Cell][]string)
+		layers[res] = make(map[h3.Cell][]uint32)
 		globalCellCounts[res] = make(map[h3.Cell]int)
 		totalGlobalCounts[res] = 0
 	}
@@ -64,6 +69,10 @@ func NewIndex() *Index {
 		layers:            layers,
 		globalCellCounts:  globalCellCounts,
 		totalGlobalCounts: totalGlobalCounts,
+		
+		entityIDToInternalID: make(map[string]uint32),
+		idToEntityID:        make(map[uint32]string),
+
 		latsBuf:           make([]float64, 0),
 		lngsBuf:           make([]float64, 0),
 		r2Buf:             make([]uint64, 0),
@@ -76,6 +85,17 @@ func NewIndex() *Index {
 type precomputedRemoval struct {
 	res  int
 	cell h3.Cell
+}
+
+func (idx *Index) getInternalID(id string) uint32 {
+	if internal, ok := idx.entityIDToInternalID[id]; ok {
+		return internal
+	}
+	idx.idCounter++
+	internal := idx.idCounter
+	idx.entityIDToInternalID[id] = internal
+	idx.idToEntityID[internal] = id
+	return internal
 }
 
 func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
@@ -139,8 +159,10 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	for _, job := range removalJobs {
 		ids := idx.layers[job.res][job.cell]
 		for _, id := range removed {
+			internalID, ok := idx.entityIDToInternalID[id]
+			if !ok { continue }
 			for i, existingID := range ids {
-				if existingID == id {
+				if existingID == internalID {
 					lastIdx := len(ids) - 1
 					ids[i] = ids[lastIdx]
 					ids = ids[:lastIdx]
@@ -154,12 +176,15 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	}
 	for _, id := range removed {
 		delete(idx.entities, id)
+		delete(idx.entityIDToInternalID, id)
+		// Note: We don't delete from idToEntityID here to avoid potential issues if re-inserted
 	}
 
 	// Exec Insertions / Updates
 	for i, e := range entities {
 		oldEntity, exists := idx.entities[e.ID]
 		newCells := [4]h3.Cell{h3.Cell(idx.r2Buf[i]), h3.Cell(idx.r4Buf[i]), h3.Cell(idx.r6Buf[i]), h3.Cell(idx.r7Buf[i])}
+		internalID := idx.getInternalID(e.ID)
 
 		if exists {
 			oldLatLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
@@ -174,7 +199,7 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 					// Remove from old cell
 					ids := idx.layers[res][oldCell]
 					for k, id := range ids {
-						if id == e.ID {
+						if id == internalID {
 							lastIdx := len(ids) - 1
 							ids[k] = ids[lastIdx]
 							idx.layers[res][oldCell] = ids[:lastIdx]
@@ -184,7 +209,7 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 						}
 					}
 					// Add to new cell
-					idx.layers[res][newCell] = append(idx.layers[res][newCell], e.ID)
+					idx.layers[res][newCell] = append(idx.layers[res][newCell], internalID)
 					idx.globalCellCounts[res][newCell]++
 					idx.totalGlobalCounts[res]++
 				}
@@ -196,7 +221,7 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 				if cell == 0 {
 					continue
 				}
-				idx.layers[res][cell] = append(idx.layers[res][cell], e.ID)
+				idx.layers[res][cell] = append(idx.layers[res][cell], internalID)
 				idx.globalCellCounts[res][cell]++
 				idx.totalGlobalCounts[res]++
 			}
@@ -250,18 +275,19 @@ func (idx *Index) Query(vp entity.Viewport) ([]entity.Entity, map[string]entity.
 	for viewCell := range viewportCellSet {
 		if ids, found := layer[viewCell]; found {
 			for i := 0; i < len(ids); i++ {
-				id := ids[i]
-				if _, alreadyProcessed := processedEntities[id]; alreadyProcessed {
+				internalID := ids[i]
+				stringID := idx.idToEntityID[internalID]
+				if _, alreadyProcessed := processedEntities[stringID]; alreadyProcessed {
 					continue
 				}
 
 				if !onlyClusters {
-					if e, ok := idx.entities[id]; ok {
+					if e, ok := idx.entities[stringID]; ok {
 						visible = append(visible, e)
 					}
 				}
 				totalEntitiesInViewport++
-				processedEntities[id] = struct{}{}
+				processedEntities[stringID] = struct{}{}
 			}
 		}
 
