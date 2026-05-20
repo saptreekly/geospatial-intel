@@ -35,9 +35,9 @@ func (s *AISSeeder) Interval() time.Duration {
 	return s.interval
 }
 
-// Fetch handles the connection and stream ingestion. 
+// Fetch handles the connection and stream ingestion.
 // Note: As designed in seeder.Run(), Fetch() is called periodically.
-// For a persistent stream, this implementation connects, reads, and returns 
+// For a persistent stream, this implementation connects, reads, and returns
 // the latest batch of entities available within a short timeout.
 func (s *AISSeeder) Fetch(ctx context.Context) ([]entity.Entity, error) {
 	if s.token == "" {
@@ -75,7 +75,7 @@ func (s *AISSeeder) Fetch(ctx context.Context) ([]entity.Entity, error) {
 		// Simplified extraction based on AISStream format
 		if msgType, ok := msg["MessageType"].(string); ok && msgType == "PositionReport" {
 			data := msg["Message"].(map[string]interface{})["PositionReport"].(map[string]interface{})
-			
+
 			mmsi := fmt.Sprintf("%v", data["MMSI"])
 			lat := data["Latitude"].(float64)
 			lng := data["Longitude"].(float64)

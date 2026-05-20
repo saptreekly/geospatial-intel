@@ -17,11 +17,11 @@ const openSkyURL = "https://opensky-network.org/api/states/all"
 
 // OpenSkySeeder fetches live aircraft data from OpenSky Network.
 type OpenSkySeeder struct {
-	client       *http.Client
-	username     string
-	password     string
+	client        *http.Client
+	username      string
+	password      string
 	authenticated bool
-	interval     time.Duration
+	interval      time.Duration
 }
 
 // NewOpenSkySeeder creates a new OpenSky seeder.

@@ -46,7 +46,7 @@ func BenchmarkQuery(b *testing.B) {
 				}
 			}
 			idx.BatchUpdateRust(entities, nil)
-			
+
 			vp := entity.Viewport{North: 90, South: -90, East: 180, West: -180, Zoom: 7}
 
 			b.ReportAllocs()

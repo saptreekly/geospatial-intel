@@ -37,7 +37,6 @@ var deltaPool = sync.Pool{
 	},
 }
 
-
 // NewHub creates a new Hub.
 func NewHub(s *store.Store) *Hub {
 	h := &Hub{
@@ -153,7 +152,7 @@ func (h *Hub) broadcast() {
 				deltaPool.Put(delta)
 			}
 		}
-		
+
 		elapsed := time.Since(start)
 		if elapsed > 50*time.Millisecond {
 			log.Printf("WARNING: Broadcast loop slow: %v, clients swept: %d, total delta entities: %d", elapsed, clientsSwept, totalDeltaPayloadSize)

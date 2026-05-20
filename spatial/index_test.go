@@ -1,9 +1,9 @@
 package spatial
 
 import (
-	"testing"
 	"github.com/saptreekly/geospatial-intel/entity"
 	"github.com/uber/h3-go/v4"
+	"testing"
 )
 
 // Helper function to create a test entity
@@ -88,7 +88,7 @@ func TestUpdate_Update(t *testing.T) {
 			t.Errorf("Old H3 cell %d for e1 should be empty", oldH3e1)
 		}
 	}
-	
+
 	if len(idx.layers[indexingResolution][newH3e1]) != 1 {
 		t.Errorf("Expected 1 entity in new H3 cell %d, got %d", newH3e1, len(idx.layers[indexingResolution][newH3e1]))
 	}
@@ -132,7 +132,7 @@ func TestQuery_Visible(t *testing.T) {
 	// Entities in a known cell at indexingResolution=7
 	e1 := createTestEntity("e1", 34.0522, -118.2437) // Los Angeles
 	e2 := createTestEntity("e2", 34.0522, -118.2437) // Same cell as e1
-	e3 := createTestEntity("e3", 40.7128, -74.0060) // New York
+	e3 := createTestEntity("e3", 40.7128, -74.0060)  // New York
 	idx.BatchUpdateRust([]entity.Entity{e1, e2, e3}, nil)
 
 	// Viewport covering Los Angeles at zoom level 7 (resolution 7)
@@ -140,7 +140,7 @@ func TestQuery_Visible(t *testing.T) {
 	vpLA := entity.Viewport{
 		North: 34.2, South: 33.9, East: -118.1, West: -118.4, Zoom: 7, // Made viewport larger
 	}
-	
+
 	visible, clusters, err := idx.Query(vpLA)
 	if err != nil {
 		t.Fatalf("Query returned error: %v", err)
@@ -304,7 +304,6 @@ func TestUpdate_NoCellChange(t *testing.T) {
 	}
 }
 
-
 // TestQuery_BoundaryMovement tests if entities are correctly updated/moved between viewport boundaries
 func TestQuery_BoundaryMovement(t *testing.T) {
 	idx := NewIndex()
@@ -313,7 +312,7 @@ func TestQuery_BoundaryMovement(t *testing.T) {
 
 	// Viewport covering the entity
 	vp := entity.Viewport{North: 1.0, South: -1.0, East: 1.0, West: -1.0, Zoom: 7}
-	
+
 	// Query 1: Entity visible
 	visible, _, _ := idx.Query(vp)
 	if len(visible) != 1 {

@@ -7,9 +7,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/saptreekly/geospatial-intel/entity"
 	"github.com/saptreekly/geospatial-intel/spatial"
-	_ "github.com/mattn/go-sqlite3"
 )
 
 // StoreEvent is emitted when entities change.
@@ -85,7 +85,7 @@ func (s *Store) recordHistory(entities []entity.Entity) {
 	defer stmt.Close()
 
 	for _, e := range entities {
-		_, err = stmt.Exec(e.ID, e.UpdatedAt, e.Lat, e.Lng)
+		stmt.Exec(e.ID, e.UpdatedAt, e.Lat, e.Lng)
 	}
 	tx.Commit()
 
@@ -137,7 +137,7 @@ func (s *Store) Apply(entities []entity.Entity) {
 
 	// Update spatial index
 	s.index.BatchUpdateRust(append(added, updated...), removed)
-	
+
 	// Record history
 	s.historyChan <- append(added, updated...)
 

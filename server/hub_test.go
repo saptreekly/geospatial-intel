@@ -1,16 +1,16 @@
 package server
 
 import (
-	"testing"
-	"time"
 	"github.com/saptreekly/geospatial-intel/entity"
 	"github.com/saptreekly/geospatial-intel/store"
+	"testing"
+	"time"
 )
 
 func TestHub_BroadcastOptimization(t *testing.T) {
 	s := store.NewStore()
 	h := NewHub(s)
-	
+
 	client := NewClient(0 * time.Millisecond) // Disable rate limiting
 	client.viewport = entity.Viewport{
 		North: 1.0, South: -1.0, East: 1.0, West: -1.0, Zoom: 7,

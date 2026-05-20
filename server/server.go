@@ -13,8 +13,8 @@ import (
 // Server is the HTTP server for the geospatial data service.
 type Server struct {
 	http.Server
-	hub               *Hub
-	minPushInterval   time.Duration
+	hub             *Hub
+	minPushInterval time.Duration
 }
 
 // NewServer creates a new HTTP server.
@@ -216,4 +216,3 @@ var indexHTML = `<!DOCTYPE html>
     </script>
 </body>
 </html>`
-

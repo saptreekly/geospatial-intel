@@ -20,7 +20,7 @@ var ErrRateLimit = errors.New("rate limited")
 
 // RateLimitError wraps rate limiting errors for exponential backoff handling.
 type RateLimitError struct {
-	Err       error
+	Err        error
 	RetryAfter time.Duration
 }
 
