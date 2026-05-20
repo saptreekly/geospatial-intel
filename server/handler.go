@@ -43,31 +43,7 @@ func StreamHandler(ctx context.Context, w http.ResponseWriter, r *http.Request, 
 
 	// Read viewport messages in a goroutine
 	viewportChan := make(chan entity.Viewport)
-	go func() {
-		for {
-			var msg struct {
-				Type  string  `json:"type"`
-				North float64 `json:"north"`
-				South float64 `json:"south"`
-				East  float64 `json:"east"`
-				West  float64 `json:"west"`
-				Zoom  int     `json:"zoom"`
-			}
-			if err := wsjson.Read(ctx, c, &msg); err != nil {
-				close(viewportChan)
-				return
-			}
-			if msg.Type == "viewport" {
-				viewportChan <- entity.Viewport{
-					North: msg.North,
-					South: msg.South,
-					East:  msg.East,
-					West:  msg.West,
-					Zoom:  msg.Zoom,
-				}
-			}
-		}
-	}()
+	go handleClientViewportUpdates(ctx, c, viewportChan)
 
 	// Main loop: send deltas, receive viewport updates
 	for {
@@ -85,6 +61,32 @@ func StreamHandler(ctx context.Context, w http.ResponseWriter, r *http.Request, 
 			}
 			if err := wsjson.Write(ctx, c, delta); err != nil {
 				return
+			}
+		}
+	}
+}
+
+func handleClientViewportUpdates(ctx context.Context, c *websocket.Conn, viewportChan chan<- entity.Viewport) {
+	defer close(viewportChan)
+	for {
+		var msg struct {
+			Type  string  `json:"type"`
+			North float64 `json:"north"`
+			South float64 `json:"south"`
+			East  float64 `json:"east"`
+			West  float64 `json:"west"`
+			Zoom  int     `json:"zoom"`
+		}
+		if err := wsjson.Read(ctx, c, &msg); err != nil {
+			return
+		}
+		if msg.Type == "viewport" {
+			viewportChan <- entity.Viewport{
+				North: msg.North,
+				South: msg.South,
+				East:  msg.East,
+				West:  msg.West,
+				Zoom:  msg.Zoom,
 			}
 		}
 	}
