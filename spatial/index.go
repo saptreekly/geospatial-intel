@@ -90,11 +90,12 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 }
 
 func (idx *Index) removeEntitiesLocked(removed []string) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
 	for _, id := range removed {
-		idx.mu.Lock()
 		oldEntity, ok := idx.entities[id]
 		if !ok {
-			idx.mu.Unlock()
 			continue
 		}
 		latLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
@@ -124,7 +125,6 @@ func (idx *Index) removeEntitiesLocked(removed []string) {
 			}
 		}
 		delete(idx.entities, id)
-		idx.mu.Unlock()
 	}
 }
 
@@ -164,8 +164,10 @@ func (idx *Index) UpdateWithIndices(entities []entity.Entity, removed []string, 
 }
 
 func (idx *Index) insertEntitiesLocked(entities []entity.Entity, res2, res4, res6, res7 []uint64) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
 	for i, e := range entities {
-		idx.mu.Lock()
 		oldEntity, exists := idx.entities[e.ID]
 		if exists {
 			latLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
@@ -210,7 +212,6 @@ func (idx *Index) insertEntitiesLocked(entities []entity.Entity, res2, res4, res
 
 			idx.layers[res][cell] = append(idx.layers[res][cell], e.ID)
 		}
-		idx.mu.Unlock()
 	}
 }
 
