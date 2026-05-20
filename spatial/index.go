@@ -36,6 +36,9 @@ type Index struct {
 	entities         map[string]entity.Entity
 	layers           map[int]map[h3.Cell]map[string]entity.Entity
 	globalCellCounts map[int]map[h3.Cell]int
+	// Reusable vector scratchpads
+	latsBuf, lngsBuf                   []float64
+	res2Buf, res4Buf, res6Buf, res7Buf []uint64
 }
 
 // NewIndex creates a new spatial index.
@@ -50,6 +53,12 @@ func NewIndex() *Index {
 		entities:         make(map[string]entity.Entity),
 		layers:           layers,
 		globalCellCounts: globalCellCounts,
+		latsBuf:          make([]float64, 0, 1024),
+		lngsBuf:          make([]float64, 0, 1024),
+		res2Buf:          make([]uint64, 0, 1024),
+		res4Buf:          make([]uint64, 0, 1024),
+		res6Buf:          make([]uint64, 0, 1024),
+		res7Buf:          make([]uint64, 0, 1024),
 	}
 }
 
@@ -77,28 +86,39 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 
 	// Prepare data for CGO call
 	count := len(entities)
-	lats := make([]float64, count)
-	lngs := make([]float64, count)
-	res2 := make([]uint64, count)
-	res4 := make([]uint64, count)
-	res6 := make([]uint64, count)
-	res7 := make([]uint64, count)
+
+	// Ensure buffers are large enough
+	if count > cap(idx.latsBuf) {
+		idx.latsBuf = make([]float64, count)
+		idx.lngsBuf = make([]float64, count)
+		idx.res2Buf = make([]uint64, count)
+		idx.res4Buf = make([]uint64, count)
+		idx.res6Buf = make([]uint64, count)
+		idx.res7Buf = make([]uint64, count)
+	} else {
+		idx.latsBuf = idx.latsBuf[:count]
+		idx.lngsBuf = idx.lngsBuf[:count]
+		idx.res2Buf = idx.res2Buf[:count]
+		idx.res4Buf = idx.res4Buf[:count]
+		idx.res6Buf = idx.res6Buf[:count]
+		idx.res7Buf = idx.res7Buf[:count]
+	}
 
 	for i, e := range entities {
-		lats[i] = e.Lat
-		lngs[i] = e.Lng
+		idx.latsBuf[i] = e.Lat
+		idx.lngsBuf[i] = e.Lng
 	}
 
 	// Call Rust engine
 	if count > 0 {
 		C.compute_resolutions_batch(
-			(*C.double)(unsafe.Pointer(&lats[0])),
-			(*C.double)(unsafe.Pointer(&lngs[0])),
+			(*C.double)(unsafe.Pointer(&idx.latsBuf[0])),
+			(*C.double)(unsafe.Pointer(&idx.lngsBuf[0])),
 			C.size_t(count),
-			(*C.uint64_t)(unsafe.Pointer(&res2[0])),
-			(*C.uint64_t)(unsafe.Pointer(&res4[0])),
-			(*C.uint64_t)(unsafe.Pointer(&res6[0])),
-			(*C.uint64_t)(unsafe.Pointer(&res7[0])),
+			(*C.uint64_t)(unsafe.Pointer(&idx.res2Buf[0])),
+			(*C.uint64_t)(unsafe.Pointer(&idx.res4Buf[0])),
+			(*C.uint64_t)(unsafe.Pointer(&idx.res6Buf[0])),
+			(*C.uint64_t)(unsafe.Pointer(&idx.res7Buf[0])),
 		)
 	}
 
@@ -107,7 +127,8 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	defer idx.mu.Unlock()
 
 	idx.removeEntitiesLocked(removed)
-	idx.insertEntitiesLocked(entities, res2, res4, res6, res7)
+	// Pass buffered slices instead of full length to insertEntitiesLocked
+	idx.insertEntitiesLocked(entities, idx.res2Buf, idx.res4Buf, idx.res6Buf, idx.res7Buf)
 }
 
 func (idx *Index) removeEntitiesLocked(removed []string) {
@@ -206,11 +227,13 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 					// Explicitly copy to avoid raw pointer exposure
 					eCopy := e
 					visible = append(visible, eCopy)
-				} else {
-					clusterCounts[viewCell]++
 				}
 				processedEntities[e.ID] = struct{}{}
 			}
+		}
+
+		if onlyClusters {
+			clusterCounts[viewCell] = idx.globalCellCounts[queryResolution][viewCell]
 		}
 	}
 
@@ -220,6 +243,7 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 			clusterCounts[cell] += count
 		}
 	}
+
 	// Convert cluster cells to entity.Cluster with centroids
 	clusters = idx.buildClustersPayload(clusterCounts, viewportCells, onlyClusters)
 
