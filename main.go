@@ -11,10 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackweekly/geospatial-server/entity"
-	"github.com/jackweekly/geospatial-server/seeder"
-	"github.com/jackweekly/geospatial-server/server"
-	"github.com/jackweekly/geospatial-server/store"
+	"github.com/jackweekly/OSINT/entity"
+	"github.com/jackweekly/OSINT/seeder"
+	"github.com/jackweekly/OSINT/server"
+	"github.com/jackweekly/OSINT/store"
 )
 
 func main() {

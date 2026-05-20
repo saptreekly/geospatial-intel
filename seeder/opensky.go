@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/jackweekly/geospatial-server/entity"
+	"github.com/jackweekly/OSINT/entity"
 	"github.com/tidwall/gjson"
 )
 

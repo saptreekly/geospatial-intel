@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jackweekly/geospatial-server/store"
+	"github.com/jackweekly/OSINT/store"
 )
 
 // Server is the HTTP server for the geospatial data service.

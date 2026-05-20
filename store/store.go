@@ -4,8 +4,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/jackweekly/geospatial-server/entity"
-	"github.com/jackweekly/geospatial-server/spatial"
+	"github.com/jackweekly/OSINT/entity"
+	"github.com/jackweekly/OSINT/spatial"
 )
 
 // StoreEvent is emitted when entities change.

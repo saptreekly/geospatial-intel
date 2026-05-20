@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jackweekly/geospatial-server/entity"
+	"github.com/jackweekly/OSINT/entity"
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
 )

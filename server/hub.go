@@ -4,8 +4,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackweekly/geospatial-server/entity"
-	"github.com/jackweekly/geospatial-server/store"
+	"github.com/jackweekly/OSINT/entity"
+	"github.com/jackweekly/OSINT/store"
 )
 
 // Client represents a connected WebSocket client.
