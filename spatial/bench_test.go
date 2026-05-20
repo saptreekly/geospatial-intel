@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/jackweekly/OSINT/entity"
+	"github.com/jackweekly/osint/entity"
 )
 
 func BenchmarkBatchUpdateRust(b *testing.B) {

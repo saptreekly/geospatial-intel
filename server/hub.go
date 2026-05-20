@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackweekly/OSINT/entity"
-	"github.com/jackweekly/OSINT/store"
+	"github.com/jackweekly/osint/entity"
+	"github.com/jackweekly/osint/store"
 )
 
 // Client represents a connected WebSocket client.

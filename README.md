@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Go Version](https://img.shields.io/badge/Go-1.26+-blue.svg)](https://go.dev/)
 [![Rust Version](https://img.shields.io/badge/Rust-1.80+-orange.svg)](https://www.rust-lang.org/)
-[![Go Report Card](https://goreportcard.com/badge/github.com/jackweekly/OSINT)](https://goreportcard.com/report/github.com/jackweekly/OSINT)
+[![Go Report Card](https://goreportcard.com/badge/github.com/jackweekly/osint)](https://goreportcard.com/report/github.com/jackweekly/osint)
 ![Performance](https://img.shields.io/badge/Query-O(1)%20lookup-green)
 
 A high-performance Go server that streams real-time geospatial data (aircraft positions from OpenSky Network) to WebSocket clients, filtering by viewport and using H3 hexagonal binning for efficient spatial indexing.

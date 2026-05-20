@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jackweekly/OSINT/entity"
+	"github.com/jackweekly/osint/entity"
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
 )

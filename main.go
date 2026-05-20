@@ -11,10 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackweekly/OSINT/entity"
-	"github.com/jackweekly/OSINT/seeder"
-	"github.com/jackweekly/OSINT/server"
-	"github.com/jackweekly/OSINT/store"
+	"github.com/jackweekly/osint/entity"
+	"github.com/jackweekly/osint/seeder"
+	"github.com/jackweekly/osint/server"
+	"github.com/jackweekly/osint/store"
 )
 
 func main() {

@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/jackweekly/OSINT/entity"
+	"github.com/jackweekly/osint/entity"
 )
 
 // Seeder fetches entities from a data source.

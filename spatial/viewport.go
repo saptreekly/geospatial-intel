@@ -1,7 +1,7 @@
 package spatial
 
 import (
-	"github.com/jackweekly/OSINT/entity"
+	"github.com/jackweekly/osint/entity"
 	"github.com/uber/h3-go/v4"
 )
 
