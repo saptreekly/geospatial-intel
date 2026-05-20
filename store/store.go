@@ -2,8 +2,10 @@ package store
 
 import (
 	"database/sql"
+	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/jackweekly/OSINT/entity"
 	"github.com/jackweekly/OSINT/spatial"
@@ -22,11 +24,12 @@ type Store struct {
 	index *spatial.Index
 	db    *sql.DB
 
-	mu        sync.Mutex
-	seq       atomic.Uint64
-	lastSeen  map[string]uint64       // entity ID → seq of last poll
-	subs      map[int]chan StoreEvent // subscriber ID → channel
-	nextSubID int
+	mu          sync.Mutex
+	seq         atomic.Uint64
+	lastSeen    map[string]uint64       // entity ID → seq of last poll
+	subs        map[int]chan StoreEvent // subscriber ID → channel
+	nextSubID   int
+	historyChan chan []entity.Entity
 }
 
 // NewStore creates a new entity store.
@@ -48,16 +51,28 @@ func NewStore() *Store {
 		panic(err)
 	}
 
-	return &Store{
-		index:     spatial.NewIndex(),
-		db:        db,
-		lastSeen:  make(map[string]uint64),
-		subs:      make(map[int]chan StoreEvent),
+	s := &Store{
+		index:       spatial.NewIndex(),
+		db:          db,
+		lastSeen:    make(map[string]uint64),
+		subs:        make(map[int]chan StoreEvent),
+		historyChan: make(chan []entity.Entity, 100),
+	}
+	go s.historyWorker()
+	return s
+}
+
+// historyWorker processes historical entity writes sequentially.
+func (s *Store) historyWorker() {
+	for entities := range s.historyChan {
+		s.recordHistory(entities)
 	}
 }
 
 // recordHistory writes entity coordinates to the SQLite store.
 func (s *Store) recordHistory(entities []entity.Entity) {
+	start := time.Now()
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return
@@ -73,6 +88,10 @@ func (s *Store) recordHistory(entities []entity.Entity) {
 		_, err = stmt.Exec(e.ID, e.UpdatedAt, e.Lat, e.Lng)
 	}
 	tx.Commit()
+
+	if time.Since(start) > 200*time.Millisecond {
+		log.Printf("CRITICAL: SQLite disk transaction slow: %v", time.Since(start))
+	}
 }
 
 // Apply ingests fresh entities from a seeder.
@@ -120,7 +139,7 @@ func (s *Store) Apply(entities []entity.Entity) {
 	s.index.BatchUpdateRust(append(added, updated...), removed)
 	
 	// Record history
-	go s.recordHistory(append(added, updated...))
+	s.historyChan <- append(added, updated...)
 
 	// Emit event to all subscribers
 	event := StoreEvent{

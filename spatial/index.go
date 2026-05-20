@@ -191,7 +191,9 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 				}
 
 				if !onlyClusters {
-					visible = append(visible, e)
+					// Explicitly copy to avoid raw pointer exposure
+					eCopy := e
+					visible = append(visible, eCopy)
 				} else {
 					clusterCounts[viewCell]++
 				}

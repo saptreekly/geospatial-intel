@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log"
 	"sync"
 	"time"
 
@@ -82,6 +83,10 @@ func (h *Hub) broadcast() {
 		}
 		h.mu.Unlock()
 
+		start := time.Now()
+		clientsSwept := 0
+		totalDeltaPayloadSize := 0
+
 		for _, c := range clients {
 			// Compute delta for this client
 			visible, clusters, err := h.store.Query(c.viewport)
@@ -134,6 +139,10 @@ func (h *Hub) broadcast() {
 				continue
 			}
 
+			// Payload size tracker
+			totalDeltaPayloadSize += len(delta.Added) + len(delta.Updated) + len(delta.Removed) + len(delta.Clusters)
+			clientsSwept++
+
 			// Send delta
 			select {
 			case c.ch <- *delta: // Need to pass a value, not a pointer, as ch is chan entity.Delta
@@ -143,6 +152,11 @@ func (h *Hub) broadcast() {
 				// Client ch is full; skip this update
 				deltaPool.Put(delta)
 			}
+		}
+		
+		elapsed := time.Since(start)
+		if elapsed > 50*time.Millisecond {
+			log.Printf("WARNING: Broadcast loop slow: %v, clients swept: %d, total delta entities: %d", elapsed, clientsSwept, totalDeltaPayloadSize)
 		}
 	}
 }
