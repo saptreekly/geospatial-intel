@@ -152,7 +152,10 @@ func (idx *Index) removeEntitiesLocked(removed []string) {
 					if ids, found := idx.layers[res][cell]; found {
 						for i, existingID := range ids {
 							if existingID == id {
-								idx.layers[res][cell] = append(ids[:i], ids[i+1:]...)
+								// Fast-swap deletion: swap target with last, truncate
+								lastIdx := len(ids) - 1
+								ids[i] = ids[lastIdx]
+								idx.layers[res][cell] = ids[:lastIdx]
 								break
 							}
 						}
@@ -184,7 +187,10 @@ func (idx *Index) insertEntitiesLocked(entities []entity.Entity, res2, res4, res
 					if ids, found := idx.layers[res][oldCell]; found {
 						for j, existingID := range ids {
 							if existingID == e.ID {
-								idx.layers[res][oldCell] = append(ids[:j], ids[j+1:]...)
+								// Fast-swap deletion: swap target with last, truncate
+								lastIdx := len(ids) - 1
+								ids[j] = ids[lastIdx]
+								idx.layers[res][oldCell] = ids[:lastIdx]
 								break
 							}
 						}
