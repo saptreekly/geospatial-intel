@@ -27,11 +27,11 @@ func TestHub_BroadcastOptimization(t *testing.T) {
 		if len(delta.Added) != 1 || delta.Added[0].ID != "e1" {
 			t.Errorf("Expected delta.Added to contain e1, got %+v", delta.Added)
 		}
-		if delta.Updated != nil {
-			t.Errorf("Expected delta.Updated to be nil, got %v", delta.Updated)
+		if len(delta.Updated) != 0 {
+			t.Errorf("Expected delta.Updated to be empty, got %v", delta.Updated)
 		}
-		if delta.Removed != nil {
-			t.Errorf("Expected delta.Removed to be nil, got %v", delta.Removed)
+		if len(delta.Removed) != 0 {
+			t.Errorf("Expected delta.Removed to be empty, got %v", delta.Removed)
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("Timed out waiting for broadcast")

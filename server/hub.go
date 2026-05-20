@@ -25,6 +25,18 @@ type Hub struct {
 	sub     *store.Subscription
 }
 
+var deltaPool = sync.Pool{
+	New: func() any {
+		return &entity.Delta{
+			Added:    make([]entity.Entity, 0, 100),
+			Updated:  make([]entity.Entity, 0, 100),
+			Removed:  make([]string, 0, 100),
+			Clusters: make(map[string]entity.Cluster),
+		}
+	},
+}
+
+
 // NewHub creates a new Hub.
 func NewHub(s *store.Store) *Hub {
 	h := &Hub{
@@ -83,10 +95,16 @@ func (h *Hub) broadcast() {
 			}
 
 			// Compute delta
-			delta := entity.Delta{
-				Seq:      event.Seq,
-				Clusters: clusters,
+			delta := deltaPool.Get().(*entity.Delta)
+			delta.Seq = event.Seq
+			delta.Added = delta.Added[:0]
+			delta.Updated = delta.Updated[:0]
+			delta.Removed = delta.Removed[:0]
+			// Clear existing map entries without reallocating
+			for k := range delta.Clusters {
+				delete(delta.Clusters, k)
 			}
+			delta.Clusters = clusters
 
 			// Categorize changes
 			visibleSet := make(map[string]struct{})
@@ -110,18 +128,20 @@ func (h *Hub) broadcast() {
 				}
 			}
 
-			// Skip if no changes (including cluster changes if we care about them)
-			// Actually, if clusters changed, we should probably send even if no entities changed.
+			// Skip if no changes
 			if len(delta.Added) == 0 && len(delta.Updated) == 0 && len(delta.Removed) == 0 && len(delta.Clusters) == 0 {
+				deltaPool.Put(delta)
 				continue
 			}
 
 			// Send delta
 			select {
-			case c.ch <- delta:
+			case c.ch <- *delta: // Need to pass a value, not a pointer, as ch is chan entity.Delta
 				c.lastPush = time.Now()
+				deltaPool.Put(delta)
 			default:
 				// Client ch is full; skip this update
+				deltaPool.Put(delta)
 			}
 		}
 	}
