@@ -1,9 +1,13 @@
 package spatial
 
 import (
+	"fmt"
+	"math/rand"
+	"sync"
+	"testing"
+
 	"github.com/saptreekly/geospatial-intel/entity"
 	"github.com/uber/h3-go/v4"
-	"testing"
 )
 
 // Helper function to create a test entity
@@ -382,5 +386,98 @@ func TestQuery_ZoomTransition(t *testing.T) {
 	}
 	if len(clustersOut) == 0 {
 		t.Errorf("Expected at least one cluster, got 0")
+	}
+}
+
+func TestIndex_ConcurrentAccessStress(t *testing.T) {
+	idx := NewIndex()
+	var wg sync.WaitGroup
+	numRoutines := 100
+	opsPerRoutine := 200
+
+	wg.Add(numRoutines * 2)
+
+	// Writers
+	for i := 0; i < numRoutines; i++ {
+		go func(rID int) {
+			defer wg.Done()
+			for j := 0; j < opsPerRoutine; j++ {
+				entityID := fmt.Sprintf("e-%d-%d", rID, j)
+				e := entity.Entity{
+					ID:  entityID,
+					Lat: rand.Float64()*180 - 90,
+					Lng: rand.Float64()*360 - 180,
+				}
+				idx.BatchUpdateRust([]entity.Entity{e}, nil)
+			}
+		}(i)
+	}
+
+	// Readers
+	for i := 0; i < numRoutines; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < opsPerRoutine; j++ {
+				vp := entity.Viewport{
+					North: rand.Float64()*180 - 90,
+					South: rand.Float64()*180 - 90,
+					East:  rand.Float64()*360 - 180,
+					West:  rand.Float64()*360 - 180,
+					Zoom:  rand.Intn(10),
+				}
+				_, _, _ = idx.Query(vp)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// TestIndex_CGO_BoundaryInvariants tests edge cases for the CGO boundary.
+func TestIndex_CGO_BoundaryInvariants(t *testing.T) {
+	tests := []struct {
+		name     string
+		entities []entity.Entity
+		removed  []string
+	}{
+		{"Case A: Empty", nil, nil},
+		{"Case B: Invalid Coords", []entity.Entity{{ID: "invalid", Lat: 195.0, Lng: -360.0}}, nil},
+		{"Case C: Massive Batch", make([]entity.Entity, 5000), nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			idx := NewIndex()
+			// Generate massive batch data
+			if tt.name == "Case C: Massive Batch" {
+				for i := 0; i < len(tt.entities); i++ {
+					tt.entities[i] = entity.Entity{
+						ID:  fmt.Sprintf("e-%d", i),
+						Lat: 0.0,
+						Lng: 0.0,
+					}
+				}
+			}
+
+			// Perform update - should not panic
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("BatchUpdateRust panicked: %v", r)
+				}
+			}()
+			idx.BatchUpdateRust(tt.entities, tt.removed)
+
+			// Assertions
+			if tt.name == "Case B: Invalid Coords" {
+				// We expect the entity to be in idx.entities but not necessarily indexed if the Rust side returns 0.
+				// If the Rust side returned a valid cell, it is indexed.
+				// The key is that the system should not panic.
+			}
+			if tt.name == "Case C: Massive Batch" {
+				// Check that all 5000 entities were indexed
+				if len(idx.entities) != 5000 {
+					t.Errorf("Expected 5000 entities, got %d", len(idx.entities))
+				}
+			}
+		})
 	}
 }

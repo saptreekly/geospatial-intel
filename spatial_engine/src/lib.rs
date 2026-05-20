@@ -23,6 +23,7 @@ pub extern "C" fn compute_resolutions_batch(
         let res6_slice = slice::from_raw_parts_mut(out_res6, count);
         let res7_slice = slice::from_raw_parts_mut(out_res7, count);
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..count {
             if let Ok(ll) = LatLng::new(lats_slice[i], lngs_slice[i]) {
                 res2_slice[i] = ll.to_cell(h3o::Resolution::Two).into();

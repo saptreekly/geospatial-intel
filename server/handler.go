@@ -26,6 +26,7 @@ func StreamHandler(ctx context.Context, w http.ResponseWriter, r *http.Request, 
 
 	client := NewClient(minPushInterval)
 	h.Register(client)
+	log.Printf("Client registered")
 	defer h.Unregister(client)
 
 	// Set up ping/pong for keepalive

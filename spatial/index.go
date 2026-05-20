@@ -32,10 +32,10 @@ var targetResolutions = []int{2, 4, 6, 7}
 
 // Index is a thread-safe spatial index using H3.
 type Index struct {
-	mu               sync.RWMutex
-	entities         map[string]entity.Entity
-	layers           map[int]map[h3.Cell][]string
-	globalCellCounts map[int]map[h3.Cell]int
+	mu                sync.RWMutex
+	entities          map[string]entity.Entity
+	layers            map[int]map[h3.Cell][]string
+	globalCellCounts  map[int]map[h3.Cell]int
 	totalGlobalCounts map[int]int
 	// Reusable vector scratchpads
 	latsBuf, lngsBuf                   []float64
@@ -85,55 +85,8 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	start := time.Now()
 	defer util.LogIfSlow(start, 50*time.Millisecond, "BatchUpdateRust")
 
-	if len(entities) == 0 && len(removed) == 0 {
-		return
-	}
-
-	// Prepare data for CGO call
-	count := len(entities)
-
-	// Ensure buffers are large enough
-	if count > cap(idx.latsBuf) {
-		idx.latsBuf = make([]float64, count)
-		idx.lngsBuf = make([]float64, count)
-		idx.res2Buf = make([]uint64, count)
-		idx.res4Buf = make([]uint64, count)
-		idx.res6Buf = make([]uint64, count)
-		idx.res7Buf = make([]uint64, count)
-	} else {
-		idx.latsBuf = idx.latsBuf[:count]
-		idx.lngsBuf = idx.lngsBuf[:count]
-		idx.res2Buf = idx.res2Buf[:count]
-		idx.res4Buf = idx.res4Buf[:count]
-		idx.res6Buf = idx.res6Buf[:count]
-		idx.res7Buf = idx.res7Buf[:count]
-	}
-
-	for i, e := range entities {
-		idx.latsBuf[i] = e.Lat
-		idx.lngsBuf[i] = e.Lng
-	}
-
-	// Call Rust engine
-	if count > 0 {
-		C.compute_resolutions_batch(
-			(*C.double)(unsafe.Pointer(&idx.latsBuf[0])),
-			(*C.double)(unsafe.Pointer(&idx.lngsBuf[0])),
-			C.size_t(count),
-			(*C.uint64_t)(unsafe.Pointer(&idx.res2Buf[0])),
-			(*C.uint64_t)(unsafe.Pointer(&idx.res4Buf[0])),
-			(*C.uint64_t)(unsafe.Pointer(&idx.res6Buf[0])),
-			(*C.uint64_t)(unsafe.Pointer(&idx.res7Buf[0])),
-		)
-	}
-
-	// Update internal state
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-
-	idx.removeEntitiesLocked(removed)
-	// Pass buffered slices instead of full length to insertEntitiesLocked
-	idx.insertEntitiesLocked(entities, idx.res2Buf, idx.res4Buf, idx.res6Buf, idx.res7Buf)
+	res2, res4, res6, res7 := idx.ComputeRustIndices(entities)
+	idx.UpdateWithIndices(entities, removed, res2, res4, res6, res7)
 }
 
 func (idx *Index) removeEntitiesLocked(removed []string) {
@@ -170,6 +123,44 @@ func (idx *Index) removeEntitiesLocked(removed []string) {
 	}
 }
 
+// ComputeRustIndices computes H3 indices for entities using the Rust engine without locking.
+func (idx *Index) ComputeRustIndices(entities []entity.Entity) (res2, res4, res6, res7 []uint64) {
+	count := len(entities)
+	lats := make([]float64, count)
+	lngs := make([]float64, count)
+	res2 = make([]uint64, count)
+	res4 = make([]uint64, count)
+	res6 = make([]uint64, count)
+	res7 = make([]uint64, count)
+
+	for i, e := range entities {
+		lats[i] = e.Lat
+		lngs[i] = e.Lng
+	}
+
+	if count > 0 {
+		C.compute_resolutions_batch(
+			(*C.double)(unsafe.Pointer(&lats[0])),
+			(*C.double)(unsafe.Pointer(&lngs[0])),
+			C.size_t(count),
+			(*C.uint64_t)(unsafe.Pointer(&res2[0])),
+			(*C.uint64_t)(unsafe.Pointer(&res4[0])),
+			(*C.uint64_t)(unsafe.Pointer(&res6[0])),
+			(*C.uint64_t)(unsafe.Pointer(&res7[0])),
+		)
+	}
+	return
+}
+
+// UpdateWithIndices updates the spatial index using pre-computed H3 indices.
+func (idx *Index) UpdateWithIndices(entities []entity.Entity, removed []string, res2, res4, res6, res7 []uint64) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	idx.removeEntitiesLocked(removed)
+	idx.insertEntitiesLocked(entities, res2, res4, res6, res7)
+}
+
 func (idx *Index) insertEntitiesLocked(entities []entity.Entity, res2, res4, res6, res7 []uint64) {
 	for i, e := range entities {
 		oldEntity, exists := idx.entities[e.ID]
@@ -204,7 +195,7 @@ func (idx *Index) insertEntitiesLocked(entities []entity.Entity, res2, res4, res
 
 		idx.entities[e.ID] = e
 
-		// Use H3 indices from Rust
+		// Use H3 indices from arguments
 		newCells := [4]h3.Cell{h3.Cell(res2[i]), h3.Cell(res4[i]), h3.Cell(res6[i]), h3.Cell(res7[i])}
 		for j, res := range targetResolutions {
 			cell := newCells[j]

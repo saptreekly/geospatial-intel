@@ -104,8 +104,6 @@ func (s *Store) Apply(entities []entity.Entity) {
 	defer util.LogIfSlow(start, 50*time.Millisecond, "Store.Apply")
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	seq := s.seq.Add(1)
 
 	// Assign versions and determine added/updated
@@ -140,9 +138,16 @@ func (s *Store) Apply(entities []entity.Entity) {
 			}
 		}
 	}
+	s.mu.Unlock()
 
-	// Update spatial index
-	s.index.BatchUpdateRust(append(added, updated...), removed)
+	// Compute Rust indices outside lock
+	res2, res4, res6, res7 := s.index.ComputeRustIndices(append(added, updated...))
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Update spatial index with pre-computed indices
+	s.index.UpdateWithIndices(append(added, updated...), removed, res2, res4, res6, res7)
 
 	// Record history
 	s.historyChan <- append(added, updated...)
