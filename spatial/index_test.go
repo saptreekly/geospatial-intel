@@ -144,8 +144,8 @@ func TestQuery_Visible(t *testing.T) {
 		t.Fatalf("Query returned error: %v", err)
 	}
 
-	if len(clusters) != 0 {
-		t.Errorf("Expected no clusters, got %d", len(clusters))
+	if len(clusters) != 1 {
+		t.Errorf("Expected 1 cluster (for e3), got %d, clusters=%+v", len(clusters), clusters)
 	}
 
 	if len(visible) != 2 {
@@ -302,3 +302,56 @@ func TestUpdate_NoCellChange(t *testing.T) {
 	}
 }
 
+
+// TestQuery_BoundaryMovement tests if entities are correctly updated/moved between viewport boundaries
+func TestQuery_BoundaryMovement(t *testing.T) {
+	idx := NewIndex()
+	e1 := createTestEntity("e1", 0.0, 0.0)
+	idx.Update([]entity.Entity{e1}, nil)
+
+	// Viewport covering the entity
+	vp := entity.Viewport{North: 1.0, South: -1.0, East: 1.0, West: -1.0, Zoom: 7}
+	
+	// Query 1: Entity visible
+	visible, _, _ := idx.Query(vp)
+	if len(visible) != 1 {
+		t.Errorf("Expected 1 visible entity, got %d", len(visible))
+	}
+
+	// Move entity out of viewport
+	e1Updated := createTestEntity("e1", 10.0, 10.0)
+	idx.Update([]entity.Entity{e1Updated}, nil)
+
+	// Query 2: Entity not visible (should be in clusters if outside)
+	visible, clusters, _ := idx.Query(vp)
+	if len(visible) != 0 {
+		t.Errorf("Expected 0 visible entities, got %d", len(visible))
+	}
+	if len(clusters) == 0 {
+		t.Errorf("Expected at least one cluster for entity outside viewport, got 0")
+	}
+}
+
+// TestQuery_ZoomTransition tests if entities correctly transition from visible to clustered when zooming out
+func TestQuery_ZoomTransition(t *testing.T) {
+	idx := NewIndex()
+	e1 := createTestEntity("e1", 0.0, 0.0)
+	idx.Update([]entity.Entity{e1}, nil)
+
+	// Zoomed in (Resolution 7) -> Visible
+	vpIn := entity.Viewport{North: 1.0, South: -1.0, East: 1.0, West: -1.0, Zoom: 7}
+	visibleIn, _, _ := idx.Query(vpIn)
+	if len(visibleIn) != 1 {
+		t.Errorf("Expected 1 visible entity, got %d", len(visibleIn))
+	}
+
+	// Zoomed out (Resolution 2) -> Clustered
+	vpOut := entity.Viewport{North: 90.0, South: -90.0, East: 180.0, West: -180.0, Zoom: 0}
+	visibleOut, clustersOut, _ := idx.Query(vpOut)
+	if len(visibleOut) != 0 {
+		t.Errorf("Expected 0 visible entities, got %d", len(visibleOut))
+	}
+	if len(clustersOut) == 0 {
+		t.Errorf("Expected at least one cluster, got 0")
+	}
+}

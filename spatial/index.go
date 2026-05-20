@@ -181,15 +181,39 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 	// Convert cluster cells to entity.Cluster with centroids
 	clusters = make(map[string]entity.Cluster)
 	for cell, count := range clusterCounts {
-		if count > 1 || onlyClusters { // always show clusters if onlyClusters is true, regardless of count
-			latLng, _ := h3.CellToLatLng(cell)
-			clusters[cell.String()] = entity.Cluster{
-				Lat:   latLng.Lat,
-				Lng:   latLng.Lng,
-				Count: count,
+		// Determine if this cell is within the viewport
+		inViewport := false
+		for _, vc := range viewportCells {
+			if vc == cell {
+				inViewport = true
+				break
+			}
+		}
+
+		// Logic:
+		// - If in viewport: only cluster if count > 1 OR zoomed out (onlyClusters)
+		// - If outside viewport: cluster if count > 0
+		if inViewport {
+			if count > 1 || onlyClusters {
+				latLng, _ := h3.CellToLatLng(cell)
+				clusters[cell.String()] = entity.Cluster{
+					Lat:   latLng.Lat,
+					Lng:   latLng.Lng,
+					Count: count,
+				}
+			}
+		} else {
+			if count > 0 {
+				latLng, _ := h3.CellToLatLng(cell)
+				clusters[cell.String()] = entity.Cluster{
+					Lat:   latLng.Lat,
+					Lng:   latLng.Lng,
+					Count: count,
+				}
 			}
 		}
 	}
+
 
 	return visible, clusters, nil
 }
