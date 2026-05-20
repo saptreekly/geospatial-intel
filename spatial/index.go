@@ -32,34 +32,25 @@ var targetResolutions = []int{2, 4, 6, 7}
 type Index struct {
 	mu                sync.RWMutex
 	entities          map[string]entity.Entity
-	layers            map[int]map[h3.Cell][]string
+	layers            map[int]map[h3.Cell]map[string]struct{}
 	globalCellCounts  map[int]map[h3.Cell]int
 	totalGlobalCounts map[int]int
-	latsBuf, lngsBuf                   []float64
-	res2Buf, res4Buf, res6Buf, res7Buf []uint64
 }
 
 func NewIndex() *Index {
-	layers := make(map[int]map[h3.Cell][]string)
+	layers := make(map[int]map[h3.Cell]map[string]struct{})
 	globalCellCounts := make(map[int]map[h3.Cell]int)
 	totalGlobalCounts := make(map[int]int)
 	for _, res := range targetResolutions {
-		layers[res] = make(map[h3.Cell][]string)
+		layers[res] = make(map[h3.Cell]map[string]struct{})
 		globalCellCounts[res] = make(map[h3.Cell]int)
 		totalGlobalCounts[res] = 0
 	}
-	initialCap := 100000
 	return &Index{
 		entities:          make(map[string]entity.Entity),
 		layers:            layers,
 		globalCellCounts:  globalCellCounts,
 		totalGlobalCounts: totalGlobalCounts,
-		latsBuf:           make([]float64, 0, initialCap),
-		lngsBuf:           make([]float64, 0, initialCap),
-		res2Buf:           make([]uint64, 0, initialCap),
-		res4Buf:           make([]uint64, 0, initialCap),
-		res6Buf:           make([]uint64, 0, initialCap),
-		res7Buf:           make([]uint64, 0, initialCap),
 	}
 }
 
@@ -72,7 +63,7 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	start := time.Now()
 	defer util.LogIfSlow(start, 50*time.Millisecond, "BatchUpdateRust")
 
-	// STEP 1: PRE-COMPUTE REMOVALS (RLOCK ONLY)
+	// STEP 1: PRE-COMPUTE REMOVALS (READ LOCK)
 	var removalJobs []precomputedRemoval
 	if len(removed) > 0 {
 		idx.mu.RLock()
@@ -89,7 +80,7 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 		idx.mu.RUnlock()
 	}
 
-	// STEP 2: PROJECT CGO LATENCY CHANNELS (NO LOCKS!)
+	// STEP 2: PRE-COMPUTE NEW INDICES VIA NATIVE RUST CORE (NO LOCKS!)
 	count := len(entities)
 	var r2, r4, r6, r7 []uint64
 	if count > 0 {
@@ -116,7 +107,7 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 		)
 	}
 
-	// STEP 3: ATOMIC MEMORY WRITE DOORWAY (TIGHT LOCK GATEWAY)
+	// STEP 3: ATOMIC MEMORY MUTATION GATE (ONE TIGHT WRITE LOCK)
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
@@ -125,27 +116,19 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 		removedSet[id] = struct{}{}
 	}
 
-	// Instant Deletions O(1) Swaps
+	// Exec Deletions
 	for _, job := range removalJobs {
-		idx.globalCellCounts[job.res][job.cell]--
-		if idx.globalCellCounts[job.res][job.cell] == 0 {
-			delete(idx.globalCellCounts[job.res], job.cell)
-		}
-		idx.totalGlobalCounts[job.res]--
-
-		if ids, found := idx.layers[job.res][job.cell]; found {
-			for i := 0; i < len(ids); {
-				if _, isRemoved := removedSet[ids[i]]; isRemoved {
-					lastIdx := len(ids) - 1
-					ids[i] = ids[lastIdx]
-					ids = ids[:lastIdx]
-					idx.layers[job.res][job.cell] = ids // Force save
-				} else {
-					i++
+		if cellMap, found := idx.layers[job.res][job.cell]; found {
+			for _, id := range removed {
+				if _, exists := cellMap[id]; exists {
+					delete(cellMap, id)
+					idx.globalCellCounts[job.res][job.cell]--
+					idx.totalGlobalCounts[job.res]--
 				}
 			}
-			if len(idx.layers[job.res][job.cell]) == 0 {
+			if len(cellMap) == 0 {
 				delete(idx.layers[job.res], job.cell)
+				delete(idx.globalCellCounts[job.res], job.cell)
 			}
 		}
 	}
@@ -153,32 +136,22 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 		delete(idx.entities, id)
 	}
 
-	// Instant Insertions
+	// Exec Insertions / Updates
 	for i, e := range entities {
 		oldEntity, exists := idx.entities[e.ID]
 		if exists {
 			latLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
 			for _, res := range targetResolutions {
 				if oldCell, oldErr := h3.LatLngToCell(latLng, res); oldErr == nil {
-					idx.globalCellCounts[res][oldCell]--
-					if idx.globalCellCounts[res][oldCell] == 0 {
-						delete(idx.globalCellCounts[res], oldCell)
-					}
-					idx.totalGlobalCounts[res]--
-
-					if ids, found := idx.layers[res][oldCell]; found {
-						for j := 0; j < len(ids); {
-							if ids[j] == e.ID {
-								lastIdx := len(ids) - 1
-								ids[j] = ids[lastIdx]
-								ids = ids[:lastIdx]
-								idx.layers[res][oldCell] = ids // Force save
-							} else {
-								j++
-							}
+					if cellMap, found := idx.layers[res][oldCell]; found {
+						if _, hasItem := cellMap[e.ID]; hasItem {
+							delete(cellMap, e.ID)
+							idx.globalCellCounts[res][oldCell]--
+							idx.totalGlobalCounts[res]--
 						}
-						if len(idx.layers[res][oldCell]) == 0 {
+						if len(cellMap) == 0 {
 							delete(idx.layers[res], oldCell)
+							delete(idx.globalCellCounts[res], oldCell)
 						}
 					}
 				}
@@ -193,9 +166,16 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 			if cell == 0 {
 				continue
 			}
-			idx.globalCellCounts[res][cell]++
-			idx.totalGlobalCounts[res]++
-			idx.layers[res][cell] = append(idx.layers[res][cell], e.ID)
+			
+			if _, initialized := idx.layers[res][cell]; !initialized {
+				idx.layers[res][cell] = make(map[string]struct{})
+			}
+			
+			if _, exists := idx.layers[res][cell][e.ID]; !exists {
+				idx.layers[res][cell][e.ID] = struct{}{}
+				idx.globalCellCounts[res][cell]++
+				idx.totalGlobalCounts[res]++
+			}
 		}
 	}
 }
@@ -225,9 +205,9 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 
 	layer := idx.layers[queryResolution]
 	totalEntitiesInViewport := 0
-	for _, viewCell := range viewportCells {
-		if ids, found := layer[viewCell]; found {
-			for _, id := range ids {
+	for viewCell := range viewportCellSet {
+		if cellMap, found := layer[viewCell]; found {
+			for id := range cellMap {
 				if _, alreadyProcessed := processedEntities[id]; alreadyProcessed {
 					continue
 				}

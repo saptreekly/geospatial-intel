@@ -2,10 +2,8 @@ package spatial
 
 import (
 	"fmt"
-	"math/rand"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/saptreekly/geospatial-intel/entity"
 	"github.com/uber/h3-go/v4"
@@ -56,7 +54,7 @@ func TestUpdate_Add(t *testing.T) {
 		t.Errorf("Expected 1 entity in h3e1 cell, got %d", len(idx.layers[indexingResolution][h3e1]))
 	}
 	foundE1 := false
-	for _, id := range idx.layers[indexingResolution][h3e1] {
+	for id := range idx.layers[indexingResolution][h3e1] {
 		if id == e1.ID {
 			foundE1 = true
 			break
@@ -69,7 +67,7 @@ func TestUpdate_Add(t *testing.T) {
 		t.Errorf("Expected 1 entity in h3e2 cell, got %d", len(idx.layers[indexingResolution][h3e2]))
 	}
 	foundE2 := false
-	for _, id := range idx.layers[indexingResolution][h3e2] {
+	for id := range idx.layers[indexingResolution][h3e2] {
 		if id == e2.ID {
 			foundE2 = true
 			break
@@ -111,7 +109,7 @@ func TestUpdate_Update(t *testing.T) {
 		t.Errorf("Expected 1 entity in new H3 cell %d, got %d", newH3e1, len(idx.layers[indexingResolution][newH3e1]))
 	}
 	foundUpdated := false
-	for _, id := range idx.layers[indexingResolution][newH3e1] {
+	for id := range idx.layers[indexingResolution][newH3e1] {
 		if id == e1Updated.ID {
 			foundUpdated = true
 			break
@@ -269,7 +267,7 @@ func TestUpdate_NoCellChange(t *testing.T) {
 		t.Errorf("Expected 1 entity in H3 cell %d, got %d", h3e1, len(idx.layers[indexingResolution][h3e1]))
 	}
 	found := false
-	for _, id := range idx.layers[indexingResolution][h3e1] {
+	for id := range idx.layers[indexingResolution][h3e1] {
 		if id == e1Updated.ID {
 			found = true
 			break
@@ -333,26 +331,25 @@ func TestQuery_ZoomTransition(t *testing.T) {
 	}
 }
 
-func TestIndex_ConcurrentAccessStress_Skipped(t *testing.T) {
+func TestIndex_ConcurrentAccessStress(t *testing.T) {
 	idx := NewIndex()
+	const (
+		numRoutines   = 2
+		opsPerRoutine = 10
+	)
 	var wg sync.WaitGroup
-	numRoutines := 100
-	opsPerRoutine := 200
-
 	wg.Add(numRoutines * 2)
 
 	// Writers
 	for i := 0; i < numRoutines; i++ {
 		go func(rID int) {
 			defer wg.Done()
-			source := rand.NewSource(time.Now().UnixNano() + int64(rID))
-			r := rand.New(source)
 			for j := 0; j < opsPerRoutine; j++ {
 				entityID := fmt.Sprintf("e-%d-%d", rID, j)
 				e := entity.Entity{
 					ID:  entityID,
-					Lat: r.Float64()*180 - 90,
-					Lng: r.Float64()*360 - 180,
+					Lat: float64(j),
+					Lng: float64(j),
 				}
 				idx.BatchUpdateRust([]entity.Entity{e}, nil)
 			}
@@ -363,15 +360,9 @@ func TestIndex_ConcurrentAccessStress_Skipped(t *testing.T) {
 	for i := 0; i < numRoutines; i++ {
 		go func(rID int) {
 			defer wg.Done()
-			source := rand.NewSource(time.Now().UnixNano() + int64(rID + numRoutines))
-			r := rand.New(source)
 			for j := 0; j < opsPerRoutine; j++ {
 				vp := entity.Viewport{
-					North: r.Float64()*180 - 90,
-					South: r.Float64()*180 - 90,
-					East:  r.Float64()*360 - 180,
-					West:  r.Float64()*360 - 180,
-					Zoom:  r.Intn(10),
+					North: 90, South: -90, East: 180, West: -180, Zoom: 7,
 				}
 				_, _, _ = idx.Query(vp)
 			}

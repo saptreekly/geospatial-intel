@@ -2,7 +2,6 @@ package store
 
 import (
 	"database/sql"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -65,7 +64,7 @@ func (s *Store) Apply(entities []entity.Entity) {
 	}
 	s.mu.Unlock()
 
-	// Pass directly to the spatial package boundaries cleanly
+	// Pass cleanly to the spatial index package boundary
 	s.index.BatchUpdateRust(append(added, updated...), removed)
 
 	s.mu.Lock()
@@ -84,7 +83,7 @@ func (s *Store) Apply(entities []entity.Entity) {
 		event.Changed = append(event.Changed, e.ID)
 	}
 
-	for _, ch := range s.subs {
+	for ch := range s.subs {
 		select {
 		case ch <- event:
 		default:
