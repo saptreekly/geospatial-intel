@@ -51,6 +51,11 @@ func NewStore() *Store {
 		panic(err)
 	}
 
+	_, err = db.Exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY;")
+	if err != nil {
+		panic(err)
+	}
+
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS history (
 		entity_id TEXT,
 		timestamp INTEGER,
@@ -224,6 +229,11 @@ func (s *Store) Unsubscribe(sub *Subscription) {
 func (s *Store) Query(vp entity.Viewport) (visible []entity.Entity, clusters map[string]entity.Cluster, err error) {
 	return s.index.Query(vp)
 }
+
+func (s *Store) Seq() uint64 {
+	return s.seq.Load()
+}
+
 
 func (s *Store) GetHistory(id string) ([]entity.Entity, error) {
 	rows, err := s.db.Query("SELECT timestamp, lat, lng FROM history WHERE entity_id = ? ORDER BY timestamp DESC LIMIT 100", id)

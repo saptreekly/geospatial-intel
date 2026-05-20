@@ -59,7 +59,7 @@ func StreamHandler(ctx context.Context, w http.ResponseWriter, r *http.Request, 
 			if !ok {
 				return
 			}
-			client.SetViewport(vp)
+			h.HandleViewportUpdate(client, vp)
 		case deltaBytes, ok := <-client.ch:
 			if !ok {
 				return

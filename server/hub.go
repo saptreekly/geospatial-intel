@@ -36,6 +36,14 @@ func (c *Client) GetViewport() entity.Viewport {
 	return c.viewport
 }
 
+// IsEligible checks if a client is eligible for a push.
+func (c *Client) IsEligible() bool {
+	c.viewportMu.RLock()
+	defer c.viewportMu.RUnlock()
+	return time.Since(c.lastPush) >= c.minPushInterval
+}
+
+
 // Hub manages all connected clients and broadcasts events.
 type Hub struct {
 	mu      sync.Mutex
@@ -114,7 +122,7 @@ func (h *Hub) broadcast() {
 			// Pre-filter eligible clients for this Viewport
 			var eligible []*Client
 			for _, c := range clientsInGroup {
-				if time.Since(c.lastPush) >= c.minPushInterval {
+				if c.IsEligible() {
 					eligible = append(eligible, c)
 				}
 			}
@@ -149,6 +157,9 @@ func (h *Hub) broadcast() {
 }
 
 func (h *Hub) computeAndSend(c *Client, event store.StoreEvent, visible []entity.Entity, clusters map[string]entity.Cluster) (bool, int) {
+	c.viewportMu.Lock()
+	defer c.viewportMu.Unlock()
+
 	// Compute delta
 	delta := deltaPool.Get().(*entity.Delta)
 	delta.Seq = event.Seq
@@ -207,3 +218,66 @@ func (h *Hub) computeAndSend(c *Client, event store.StoreEvent, visible []entity
 		return false, 0
 	}
 }
+
+// HandleViewportUpdate locks and updates the client's viewport, immediately queries the store,
+// computes the delta against the client's seen entities, and pushes the delta to the client.
+func (h *Hub) HandleViewportUpdate(c *Client, vp entity.Viewport) {
+	c.SetViewport(vp)
+
+	visible, clusters, err := h.store.Query(vp)
+	if err != nil {
+		return
+	}
+
+	c.viewportMu.Lock()
+	defer c.viewportMu.Unlock()
+
+	delta := deltaPool.Get().(*entity.Delta)
+	delta.Seq = h.store.Seq()
+	delta.Added = delta.Added[:0]
+	delta.Updated = delta.Updated[:0]
+	delta.Removed = delta.Removed[:0]
+	for k := range delta.Clusters {
+		delete(delta.Clusters, k)
+	}
+	delta.Clusters = clusters
+
+	visibleSet := make(map[string]struct{})
+	for _, e := range visible {
+		visibleSet[e.ID] = struct{}{}
+		lastVersion, seen := c.seen[e.ID]
+		if !seen {
+			delta.Added = append(delta.Added, e)
+			c.seen[e.ID] = e.Version
+		} else if lastVersion < e.Version {
+			delta.Updated = append(delta.Updated, e)
+			c.seen[e.ID] = e.Version
+		}
+	}
+
+	for id := range c.seen {
+		if _, ok := visibleSet[id]; !ok {
+			delta.Removed = append(delta.Removed, id)
+			delete(c.seen, id)
+		}
+	}
+
+	if len(delta.Added) == 0 && len(delta.Updated) == 0 && len(delta.Removed) == 0 && len(delta.Clusters) == 0 {
+		deltaPool.Put(delta)
+		return
+	}
+
+	deltaBytes, err := json.Marshal(delta)
+	deltaPool.Put(delta)
+	if err != nil {
+		return
+	}
+
+	select {
+	case c.ch <- deltaBytes:
+		c.lastPush = time.Now()
+	default:
+		// Client ch is full; skip this update
+	}
+}
+

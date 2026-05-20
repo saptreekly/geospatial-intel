@@ -42,3 +42,37 @@ func TestHub_BroadcastOptimization(t *testing.T) {
 		t.Fatal("Timed out waiting for broadcast")
 	}
 }
+
+func TestHub_HandleViewportUpdate_Instant(t *testing.T) {
+	s := store.NewStore()
+	h := NewHub(s)
+
+	// Set a very long minPushInterval (e.g. 10s) to prove we bypass it
+	client := NewClient(10 * time.Second)
+	h.Register(client)
+
+	// Add an entity
+	e := entity.Entity{ID: "e1", Lat: 0.0, Lng: 0.0, Version: 1}
+	s.Apply([]entity.Entity{e})
+
+	// Call HandleViewportUpdate directly, which should bypass minPushInterval
+	vp := entity.Viewport{
+		North: 1.0, South: -1.0, East: 1.0, West: -1.0, Zoom: 7,
+	}
+	h.HandleViewportUpdate(client, vp)
+
+	// We should receive the delta instantly
+	select {
+	case deltaBytes := <-client.ch:
+		var delta entity.Delta
+		if err := json.Unmarshal(deltaBytes, &delta); err != nil {
+			t.Fatalf("Failed to unmarshal delta: %v", err)
+		}
+		if len(delta.Added) != 1 || delta.Added[0].ID != "e1" {
+			t.Errorf("Expected delta.Added to contain e1, got %+v", delta.Added)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Timed out waiting for instant viewport update delta")
+	}
+}
+
