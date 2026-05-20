@@ -1,12 +1,13 @@
 package seeder
-
 import (
 	"context"
-	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/saptreekly/geospatial-intel/entity"
@@ -19,18 +20,20 @@ const openSkyURL = "https://opensky-network.org/api/states/all"
 // OpenSkySeeder fetches live aircraft data from OpenSky Network.
 type OpenSkySeeder struct {
 	client        *http.Client
-	username      string
-	password      string
+	clientID      string
+	clientSecret  string
+	token         string
+	tokenExpiry   time.Time
 	authenticated bool
 	interval      time.Duration
 }
 
 // NewOpenSkySeeder creates a new OpenSky seeder.
-// Reads OPENSKY_USER and OPENSKY_PASS env vars for authentication.
+// Reads OPENSKY_CLIENT_ID and OPENSKY_CLIENT_SECRET env vars for authentication.
 func NewOpenSkySeeder() *OpenSkySeeder {
-	username := os.Getenv("OPENSKY_USER")
-	password := os.Getenv("OPENSKY_PASS")
-	authenticated := username != "" && password != ""
+	clientID := os.Getenv("OPENSKY_CLIENT_ID")
+	clientSecret := os.Getenv("OPENSKY_CLIENT_SECRET")
+	authenticated := clientID != "" && clientSecret != ""
 
 	interval := 60 * time.Second
 	if authenticated {
@@ -39,11 +42,52 @@ func NewOpenSkySeeder() *OpenSkySeeder {
 
 	return &OpenSkySeeder{
 		client:        &http.Client{Timeout: 10 * time.Second},
-		username:      username,
-		password:      password,
+		clientID:      clientID,
+		clientSecret:  clientSecret,
 		authenticated: authenticated,
 		interval:      interval,
 	}
+}
+
+func (s *OpenSkySeeder) getToken(ctx context.Context) error {
+	if time.Now().Add(1 * time.Minute).Before(s.tokenExpiry) {
+		return nil
+	}
+
+	data := url.Values{}
+	data.Set("grant_type", "client_credentials")
+	data.Set("client_id", s.clientID)
+	data.Set("client_secret", s.clientSecret)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token", strings.NewReader(data.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("token request failed with status: %d", resp.StatusCode)
+	}
+
+	var tokenResp struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return err
+	}
+
+	s.token = tokenResp.AccessToken
+	s.tokenExpiry = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+
+	return nil
 }
 
 func (s *OpenSkySeeder) Name() string {
@@ -73,8 +117,10 @@ func (s *OpenSkySeeder) Fetch(ctx context.Context) ([]entity.Entity, error) {
 	}
 
 	if s.authenticated {
-		auth := base64.StdEncoding.EncodeToString([]byte(s.username + ":" + s.password))
-		req.Header.Set("Authorization", "Basic "+auth)
+		if err := s.getToken(ctx); err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+s.token)
 	}
 
 	resp, err := s.client.Do(req)
