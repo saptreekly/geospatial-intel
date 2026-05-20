@@ -125,14 +125,19 @@ const indexHTML = `<!DOCTYPE html>
         function processDelta(delta) {
             // Add new entities
             for (const e of delta.added || []) {
-                const marker = L.circleMarker([e.lat, e.lng], {
-                    radius: 4,
-                    fillColor: '#ff7800',
-                    color: '#000',
-                    weight: 1,
-                    opacity: 0.7,
-                    fillOpacity: 0.7
-                }).bindPopup(e.callSign || e.id).addTo(map);
+                // A simple clean SVG path pointing north (0 degrees)
+                const planeSVG = '<svg viewBox="0 0 24 24" width="24" height="24" style="transform: rotate(' + e.heading + 'deg); transform-origin: center;">' +
+                    '<path fill="#ff7800" stroke="#000" stroke-width="1" d="M21,16V14L13,9V3.5A1.5,1.5 0 0,0 11.5,2A1.5,1.5 0 0,0 10,3.5V9L2,14V16L10,13.5V19L8,20.5V22L11.5,21L15,22V20.5L13,19V13.5L21,16Z"/>' +
+                '</svg>';
+
+                const marker = L.marker([e.lat, e.lng], {
+                    icon: L.divIcon({
+                        html: planeSVG,
+                        className: 'plane-marker',
+                        iconSize: [24, 24],
+                        iconAnchor: [12, 12]
+                    })
+                }).bindPopup('<b>' + (e.callSign || 'UNKNOWN') + '</b><br>Speed: ' + e.speed + 'kn<br>Alt: ' + e.altitude + 'ft').addTo(map);
                 markers[e.id] = marker;
             }
 
