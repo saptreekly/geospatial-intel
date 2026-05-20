@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/saptreekly/OSINT/entity"
+	"github.com/saptreekly/geospatial-intel/entity"
 )
 
 func BenchmarkBatchUpdateRust(b *testing.B) {

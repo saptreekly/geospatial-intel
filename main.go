@@ -11,10 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/saptreekly/OSINT/entity"
-	"github.com/saptreekly/OSINT/seeder"
-	"github.com/saptreekly/OSINT/server"
-	"github.com/saptreekly/OSINT/store"
+	"github.com/saptreekly/geospatial-intel/entity"
+	"github.com/saptreekly/geospatial-intel/seeder"
+	"github.com/saptreekly/geospatial-intel/server"
+	"github.com/saptreekly/geospatial-intel/store"
 )
 
 func main() {

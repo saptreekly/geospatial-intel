@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/saptreekly/OSINT/entity"
+	"github.com/saptreekly/geospatial-intel/entity"
 	"github.com/tidwall/gjson"
 )
 

@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/saptreekly/OSINT/entity"
+	"github.com/saptreekly/geospatial-intel/entity"
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
 )

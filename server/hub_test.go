@@ -3,8 +3,8 @@ package server
 import (
 	"testing"
 	"time"
-	"github.com/saptreekly/OSINT/entity"
-	"github.com/saptreekly/OSINT/store"
+	"github.com/saptreekly/geospatial-intel/entity"
+	"github.com/saptreekly/geospatial-intel/store"
 )
 
 func TestHub_BroadcastOptimization(t *testing.T) {

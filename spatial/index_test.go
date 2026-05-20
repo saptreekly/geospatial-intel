@@ -2,7 +2,7 @@ package spatial
 
 import (
 	"testing"
-	"github.com/saptreekly/OSINT/entity"
+	"github.com/saptreekly/geospatial-intel/entity"
 	"github.com/uber/h3-go/v4"
 )
 

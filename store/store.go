@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/saptreekly/OSINT/entity"
-	"github.com/saptreekly/OSINT/spatial"
+	"github.com/saptreekly/geospatial-intel/entity"
+	"github.com/saptreekly/geospatial-intel/spatial"
 	_ "github.com/mattn/go-sqlite3"
 )
 

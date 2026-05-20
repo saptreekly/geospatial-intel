@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/saptreekly/OSINT/store"
+	"github.com/saptreekly/geospatial-intel/store"
 )
 
 // Server is the HTTP server for the geospatial data service.

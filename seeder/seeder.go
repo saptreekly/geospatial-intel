@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/saptreekly/OSINT/entity"
+	"github.com/saptreekly/geospatial-intel/entity"
 )
 
 // Seeder fetches entities from a data source.

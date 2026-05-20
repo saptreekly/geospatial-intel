@@ -1,4 +1,4 @@
-module github.com/saptreekly/OSINT
+module github.com/saptreekly/geospatial-intel
 
 go 1.26.2
 
