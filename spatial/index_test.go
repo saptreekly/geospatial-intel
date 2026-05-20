@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/saptreekly/geospatial-intel/entity"
 	"github.com/uber/h3-go/v4"
@@ -401,12 +402,14 @@ func TestIndex_ConcurrentAccessStress(t *testing.T) {
 	for i := 0; i < numRoutines; i++ {
 		go func(rID int) {
 			defer wg.Done()
+			source := rand.NewSource(time.Now().UnixNano() + int64(rID))
+			r := rand.New(source)
 			for j := 0; j < opsPerRoutine; j++ {
 				entityID := fmt.Sprintf("e-%d-%d", rID, j)
 				e := entity.Entity{
 					ID:  entityID,
-					Lat: rand.Float64()*180 - 90,
-					Lng: rand.Float64()*360 - 180,
+					Lat: r.Float64()*180 - 90,
+					Lng: r.Float64()*360 - 180,
 				}
 				idx.BatchUpdateRust([]entity.Entity{e}, nil)
 			}
@@ -415,19 +418,21 @@ func TestIndex_ConcurrentAccessStress(t *testing.T) {
 
 	// Readers
 	for i := 0; i < numRoutines; i++ {
-		go func() {
+		go func(rID int) {
 			defer wg.Done()
+			source := rand.NewSource(time.Now().UnixNano() + int64(rID + numRoutines))
+			r := rand.New(source)
 			for j := 0; j < opsPerRoutine; j++ {
 				vp := entity.Viewport{
-					North: rand.Float64()*180 - 90,
-					South: rand.Float64()*180 - 90,
-					East:  rand.Float64()*360 - 180,
-					West:  rand.Float64()*360 - 180,
-					Zoom:  rand.Intn(10),
+					North: r.Float64()*180 - 90,
+					South: r.Float64()*180 - 90,
+					East:  r.Float64()*360 - 180,
+					West:  r.Float64()*360 - 180,
+					Zoom:  r.Intn(10),
 				}
 				_, _, _ = idx.Query(vp)
 			}
-		}()
+		}(i)
 	}
 	wg.Wait()
 }

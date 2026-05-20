@@ -91,35 +91,40 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 
 func (idx *Index) removeEntitiesLocked(removed []string) {
 	for _, id := range removed {
-		if oldEntity, ok := idx.entities[id]; ok {
-			latLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
-			for _, res := range targetResolutions {
-				cell, err := h3.LatLngToCell(latLng, res)
-				if err == nil {
-					idx.globalCellCounts[res][cell]--
-					if idx.globalCellCounts[res][cell] == 0 {
-						delete(idx.globalCellCounts[res], cell)
-					}
-					idx.totalGlobalCounts[res]-- // Decrement total count
+		idx.mu.Lock()
+		oldEntity, ok := idx.entities[id]
+		if !ok {
+			idx.mu.Unlock()
+			continue
+		}
+		latLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
+		for _, res := range targetResolutions {
+			cell, err := h3.LatLngToCell(latLng, res)
+			if err == nil {
+				idx.globalCellCounts[res][cell]--
+				if idx.globalCellCounts[res][cell] == 0 {
+					delete(idx.globalCellCounts[res], cell)
+				}
+				idx.totalGlobalCounts[res]-- // Decrement total count
 
-					if ids, found := idx.layers[res][cell]; found {
-						for i, existingID := range ids {
-							if existingID == id {
-								// Fast-swap deletion: swap target with last, truncate
-								lastIdx := len(ids) - 1
-								ids[i] = ids[lastIdx]
-								idx.layers[res][cell] = ids[:lastIdx]
-								break
-							}
+				if ids, found := idx.layers[res][cell]; found {
+					for i, existingID := range ids {
+						if existingID == id {
+							// Fast-swap deletion: swap target with last, truncate
+							lastIdx := len(ids) - 1
+							ids[i] = ids[lastIdx]
+							idx.layers[res][cell] = ids[:lastIdx]
+							break
 						}
-						if len(idx.layers[res][cell]) == 0 {
-							delete(idx.layers[res], cell)
-						}
+					}
+					if len(idx.layers[res][cell]) == 0 {
+						delete(idx.layers[res], cell)
 					}
 				}
 			}
-			delete(idx.entities, id)
 		}
+		delete(idx.entities, id)
+		idx.mu.Unlock()
 	}
 }
 
@@ -154,15 +159,13 @@ func (idx *Index) ComputeRustIndices(entities []entity.Entity) (res2, res4, res6
 
 // UpdateWithIndices updates the spatial index using pre-computed H3 indices.
 func (idx *Index) UpdateWithIndices(entities []entity.Entity, removed []string, res2, res4, res6, res7 []uint64) {
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-
 	idx.removeEntitiesLocked(removed)
 	idx.insertEntitiesLocked(entities, res2, res4, res6, res7)
 }
 
 func (idx *Index) insertEntitiesLocked(entities []entity.Entity, res2, res4, res6, res7 []uint64) {
 	for i, e := range entities {
+		idx.mu.Lock()
 		oldEntity, exists := idx.entities[e.ID]
 		if exists {
 			latLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
@@ -207,6 +210,7 @@ func (idx *Index) insertEntitiesLocked(entities []entity.Entity, res2, res4, res
 
 			idx.layers[res][cell] = append(idx.layers[res][cell], e.ID)
 		}
+		idx.mu.Unlock()
 	}
 }
 
