@@ -1,4 +1,4 @@
-module github.com/jackweekly/geospatial-server
+module github.com/jackweekly/OSINT
 
 go 1.26.2
 
