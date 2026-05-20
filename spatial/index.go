@@ -172,7 +172,11 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 					lastIdx := len(ids) - 1
 					ids[i] = ids[lastIdx]
 					ids = ids[:lastIdx]
-					idx.layers[job.res][job.cell] = ids
+					if len(ids) == 0 {
+						delete(idx.layers[job.res], job.cell)
+					} else {
+						idx.layers[job.res][job.cell] = ids
+					}
 					idx.globalCellCounts[job.res][job.cell]--
 					idx.totalGlobalCounts[job.res]--
 					break
@@ -208,7 +212,12 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 						if id == internalID {
 							lastIdx := len(ids) - 1
 							ids[k] = ids[lastIdx]
-							idx.layers[res][oldCell] = ids[:lastIdx]
+							ids = ids[:lastIdx]
+							if len(ids) == 0 {
+								delete(idx.layers[res], oldCell)
+							} else {
+								idx.layers[res][oldCell] = ids
+							}
 							idx.globalCellCounts[res][oldCell]--
 							idx.totalGlobalCounts[res]--
 							break
@@ -278,27 +287,55 @@ func (idx *Index) Query(vp entity.Viewport) ([]entity.Entity, map[string]entity.
 
 	layer := idx.layers[queryResolution]
 	totalEntitiesInViewport := 0
-	for viewCell := range viewportCellSet {
-		if ids, found := layer[viewCell]; found {
-			for i := 0; i < len(ids); i++ {
-				internalID := ids[i]
-				stringID := idx.idToEntityID[internalID]
-				if _, alreadyProcessed := processedEntities[stringID]; alreadyProcessed {
-					continue
-				}
 
-				if !onlyClusters {
-					if e, ok := idx.entities[stringID]; ok {
-						visible = append(visible, e)
+	if len(viewportCellSet) < len(layer) {
+		// Iterate over viewport
+		for viewCell := range viewportCellSet {
+			if ids, found := layer[viewCell]; found {
+				for i := 0; i < len(ids); i++ {
+					internalID := ids[i]
+					stringID := idx.idToEntityID[internalID]
+					if _, alreadyProcessed := processedEntities[stringID]; alreadyProcessed {
+						continue
 					}
+
+					if !onlyClusters {
+						if e, ok := idx.entities[stringID]; ok {
+							visible = append(visible, e)
+						}
+					}
+					totalEntitiesInViewport++
+					processedEntities[stringID] = struct{}{}
 				}
-				totalEntitiesInViewport++
-				processedEntities[stringID] = struct{}{}
+			}
+
+			if onlyClusters {
+				clusterCounts[viewCell] = idx.globalCellCounts[queryResolution][viewCell]
 			}
 		}
+	} else {
+		// Iterate over populated cells
+		for populatedCell, ids := range layer {
+			if _, inView := viewportCellSet[populatedCell]; inView {
+				for i := 0; i < len(ids); i++ {
+					internalID := ids[i]
+					stringID := idx.idToEntityID[internalID]
+					if _, alreadyProcessed := processedEntities[stringID]; alreadyProcessed {
+						continue
+					}
 
-		if onlyClusters {
-			clusterCounts[viewCell] = idx.globalCellCounts[queryResolution][viewCell]
+					if !onlyClusters {
+						if e, ok := idx.entities[stringID]; ok {
+							visible = append(visible, e)
+						}
+					}
+					totalEntitiesInViewport++
+					processedEntities[stringID] = struct{}{}
+				}
+			}
+			if onlyClusters {
+				clusterCounts[populatedCell] = idx.globalCellCounts[queryResolution][populatedCell]
+			}
 		}
 	}
 

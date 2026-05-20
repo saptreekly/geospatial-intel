@@ -35,10 +35,10 @@ func TestServer_WebSocketPipelineE2E(t *testing.T) {
 	// 3. Send Viewport - MUST be sent before Apply to ensure the hub sees it
 	vp := map[string]interface{}{
 		"type":  "viewport",
-		"north": 90.0,
-		"south": -90.0,
-		"east":  180.0,
-		"west":  -180.0,
+		"north": 1.0,
+		"south": -1.0,
+		"east":  1.0,
+		"west":  -1.0,
 		"zoom":  7,
 	}
 	if err := wsjson.Write(ctx, c, vp); err != nil {
