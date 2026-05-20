@@ -45,15 +45,16 @@ func Run(ctx context.Context, s Seeder, onUpdate func([]entity.Entity)) {
 		if err != nil {
 			var rateLimitErr *RateLimitError
 			if errors.As(err, &rateLimitErr) {
-				log.Printf("Seeder %s rate limited: %v. Retrying in %v", s.Name(), err, delay)
+				delay = rateLimitErr.RetryAfter
+				log.Printf("Seeder %s rate limited: %v. Waiting for API-requested backoff time: %v", s.Name(), err, delay)
+			} else {
+				log.Printf("Seeder %s error: %v. Retrying in %v", s.Name(), err, delay)
 				if delay < maxDelay {
 					delay = time.Duration(float64(delay) * 1.5)
 					if delay > maxDelay {
 						delay = maxDelay
 					}
 				}
-			} else {
-				log.Printf("Seeder %s error: %v. Retrying in %v", s.Name(), err, delay)
 			}
 			select {
 			case <-time.After(delay):

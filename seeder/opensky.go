@@ -32,9 +32,9 @@ func NewOpenSkySeeder() *OpenSkySeeder {
 	password := os.Getenv("OPENSKY_PASS")
 	authenticated := username != "" && password != ""
 
-	interval := 10 * time.Second
+	interval := 60 * time.Second
 	if authenticated {
-		interval = 5 * time.Second
+		interval = 25 * time.Second
 	}
 
 	return &OpenSkySeeder{
