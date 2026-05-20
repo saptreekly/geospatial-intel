@@ -35,6 +35,12 @@ type Index struct {
 	layers            map[int]map[h3.Cell][]string
 	globalCellCounts  map[int]map[h3.Cell]int
 	totalGlobalCounts map[int]int
+	latsBuf           []float64
+	lngsBuf           []float64
+	r2Buf             []uint64
+	r4Buf             []uint64
+	r6Buf             []uint64
+	r7Buf             []uint64
 }
 
 func NewIndex() *Index {
@@ -51,6 +57,12 @@ func NewIndex() *Index {
 		layers:            layers,
 		globalCellCounts:  globalCellCounts,
 		totalGlobalCounts: totalGlobalCounts,
+		latsBuf:           make([]float64, 0),
+		lngsBuf:           make([]float64, 0),
+		r2Buf:             make([]uint64, 0),
+		r4Buf:             make([]uint64, 0),
+		r6Buf:             make([]uint64, 0),
+		r7Buf:             make([]uint64, 0),
 	}
 }
 
@@ -63,10 +75,13 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	start := time.Now()
 	defer util.LogIfSlow(start, 50*time.Millisecond, "BatchUpdateRust")
 
-	// STEP 1: PRE-COMPUTE REMOVALS (READ LOCK)
+	// Monolithic Write Lock
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	// STEP 1: PRE-COMPUTE REMOVALS
 	var removalJobs []precomputedRemoval
 	if len(removed) > 0 {
-		idx.mu.RLock()
 		for _, id := range removed {
 			if oldEntity, ok := idx.entities[id]; ok {
 				latLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
@@ -77,19 +92,25 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 				}
 			}
 		}
-		idx.mu.RUnlock()
 	}
 
-	// STEP 2: PRE-COMPUTE NEW INDICES VIA NATIVE RUST CORE (NO LOCKS!)
+	// STEP 2: PRE-COMPUTE NEW INDICES VIA NATIVE RUST CORE
 	count := len(entities)
-	var r2, r4, r6, r7 []uint64
 	if count > 0 {
-		r2 = make([]uint64, count)
-		r4 = make([]uint64, count)
-		r6 = make([]uint64, count)
-		r7 = make([]uint64, count)
-		lats := make([]float64, count)
-		lngs := make([]float64, count)
+		if count > cap(idx.latsBuf) {
+			idx.latsBuf = make([]float64, count)
+			idx.lngsBuf = make([]float64, count)
+			idx.r2Buf = make([]uint64, count)
+			idx.r4Buf = make([]uint64, count)
+			idx.r6Buf = make([]uint64, count)
+			idx.r7Buf = make([]uint64, count)
+		}
+		lats := idx.latsBuf[:count]
+		lngs := idx.lngsBuf[:count]
+		r2 := idx.r2Buf[:count]
+		r4 := idx.r4Buf[:count]
+		r6 := idx.r6Buf[:count]
+		r7 := idx.r7Buf[:count]
 
 		for i, e := range entities {
 			lats[i] = e.Lat
@@ -106,10 +127,6 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 			(*C.uint64_t)(unsafe.Pointer(&r7[0])),
 		)
 	}
-
-	// STEP 3: ATOMIC MEMORY MUTATION GATE (ONE TIGHT WRITE LOCK)
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
 
 	// Exec Deletions
 	for _, job := range removalJobs {
@@ -157,7 +174,8 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 
 		idx.entities[e.ID] = e
 
-		newCells := [4]h3.Cell{h3.Cell(r2[i]), h3.Cell(r4[i]), h3.Cell(r6[i]), h3.Cell(r7[i])}
+		// Use persistent buffers for new cells (using r2...r7)
+		newCells := [4]h3.Cell{h3.Cell(idx.r2Buf[i]), h3.Cell(idx.r4Buf[i]), h3.Cell(idx.r6Buf[i]), h3.Cell(idx.r7Buf[i])}
 		for j, res := range targetResolutions {
 			cell := newCells[j]
 			if cell == 0 {
