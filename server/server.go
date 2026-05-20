@@ -54,7 +54,7 @@ func (s *Server) Start() error {
 }
 
 // indexHTML is the demo Leaflet.js client (defined at the end of this file).
-const indexHTML = `<!DOCTYPE html>
+var indexHTML = `<!DOCTYPE html>
 <html>
 <head>
     <title>Geospatial Server</title>
@@ -200,3 +200,4 @@ const indexHTML = `<!DOCTYPE html>
     </script>
 </body>
 </html>`
+
