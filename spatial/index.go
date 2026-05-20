@@ -250,11 +250,7 @@ func (idx *Index) Query(vp entity.Viewport) ([]entity.Entity, map[string]entity.
 	defer util.LogIfSlow(start, 10*time.Millisecond, "Query")
 
 	queryResolution := ZoomToResolution(vp.Zoom)
-	viewportCells, err := ViewportToCells(vp, queryResolution)
-	if err != nil {
-		return nil, nil, err
-	}
-
+	
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
@@ -281,14 +277,42 @@ func (idx *Index) Query(vp entity.Viewport) ([]entity.Entity, map[string]entity.
 
 	onlyClusters := vp.Zoom < 5
 
-	for _, vc := range viewportCells {
-		viewportCellSet[vc] = struct{}{}
+	if !vp.IsGlobal() {
+		viewportCells, err := ViewportToCells(vp, queryResolution)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, vc := range viewportCells {
+			viewportCellSet[vc] = struct{}{}
+		}
 	}
 
 	layer := idx.layers[queryResolution]
 	totalEntitiesInViewport := 0
 
-	if len(viewportCellSet) < len(layer) {
+	if vp.IsGlobal() {
+		// Iterate over populated cells only
+		for populatedCell, ids := range layer {
+			for i := 0; i < len(ids); i++ {
+				internalID := ids[i]
+				stringID := idx.idToEntityID[internalID]
+				if _, alreadyProcessed := processedEntities[stringID]; alreadyProcessed {
+					continue
+				}
+
+				if !onlyClusters {
+					if e, ok := idx.entities[stringID]; ok {
+						visible = append(visible, e)
+					}
+				}
+				totalEntitiesInViewport++
+				processedEntities[stringID] = struct{}{}
+			}
+			if onlyClusters {
+				clusterCounts[populatedCell] = idx.globalCellCounts[queryResolution][populatedCell]
+			}
+		}
+	} else if len(viewportCellSet) < len(layer) {
 		// Iterate over viewport
 		for viewCell := range viewportCellSet {
 			if ids, found := layer[viewCell]; found {

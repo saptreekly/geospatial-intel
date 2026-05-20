@@ -18,6 +18,10 @@ type Viewport struct {
 	Zoom                     int
 }
 
+func (vp *Viewport) IsGlobal() bool {
+	return vp.North >= 90.0 && vp.South <= -90.0 && vp.East >= 180.0 && vp.West <= -180.0
+}
+
 type Cluster struct {
 	Lat   float64 `json:"lat"`
 	Lng   float64 `json:"lng"`
