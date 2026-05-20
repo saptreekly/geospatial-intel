@@ -175,3 +175,4 @@ For millions of entities, consider:
 - Spatial partitioning (pre-index entities into geographic quadrants)
 - Streaming cells instead of individual entities
 - Client-side clustering with downloaded snapshots
+
