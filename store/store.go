@@ -143,11 +143,28 @@ func (s *Store) Apply(entities []entity.Entity) {
 	// Compute Rust indices outside lock
 	res2, res4, res6, res7 := s.index.ComputeRustIndices(append(added, updated...))
 
+	// Pre-compute removed entity cell info without holding the main lock (using RLock)
+	removedData := make(map[string]map[int]h3.Cell)
+	s.index.mu.RLock()
+	for _, id := range removed {
+		if e, ok := s.index.entities[id]; ok {
+			cells := make(map[int]h3.Cell)
+			latLng := h3.LatLng{Lat: e.Lat, Lng: e.Lng}
+			for _, res := range spatial.TargetResolutions {
+				if cell, err := h3.LatLngToCell(latLng, res); err == nil {
+					cells[res] = cell
+				}
+			}
+			removedData[id] = cells
+		}
+	}
+	s.index.mu.RUnlock()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// Update spatial index with pre-computed indices
-	s.index.UpdateWithIndices(append(added, updated...), removed, res2, res4, res6, res7)
+	s.index.UpdateWithIndices(append(added, updated...), removed, res2, res4, res6, res7, removedData)
 
 	// Record history
 	s.historyChan <- append(added, updated...)

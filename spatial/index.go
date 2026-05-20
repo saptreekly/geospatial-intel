@@ -27,22 +27,18 @@ import (
 	"github.com/uber/h3-go/v4"
 )
 
-// Pre-computed lookup per required zoom resolution layer
 var targetResolutions = []int{2, 4, 6, 7}
 
-// Index is a thread-safe spatial index using H3.
 type Index struct {
 	mu                sync.RWMutex
 	entities          map[string]entity.Entity
 	layers            map[int]map[h3.Cell][]string
 	globalCellCounts  map[int]map[h3.Cell]int
 	totalGlobalCounts map[int]int
-	// Reusable vector scratchpads
 	latsBuf, lngsBuf                   []float64
 	res2Buf, res4Buf, res6Buf, res7Buf []uint64
 }
 
-// NewIndex creates a new spatial index.
 func NewIndex() *Index {
 	layers := make(map[int]map[h3.Cell][]string)
 	globalCellCounts := make(map[int]map[h3.Cell]int)
@@ -67,129 +63,120 @@ func NewIndex() *Index {
 	}
 }
 
-// getH3Cells computes H3 indices for all target resolutions for a given location.
-func (idx *Index) getH3Cells(lat, lng float64) map[int]h3.Cell {
-	cells := make(map[int]h3.Cell)
-	latLng := h3.LatLng{Lat: lat, Lng: lng}
-	for _, res := range targetResolutions {
-		cell, err := h3.LatLngToCell(latLng, res)
-		if err == nil {
-			cells[res] = cell
-		}
-	}
-	return cells
+type precomputedRemoval struct {
+	res  int
+	cell h3.Cell
 }
 
-// BatchUpdateRust updates entities using the Rust spatial engine.
 func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	start := time.Now()
 	defer util.LogIfSlow(start, 50*time.Millisecond, "BatchUpdateRust")
 
-	res2, res4, res6, res7 := idx.ComputeRustIndices(entities)
-	idx.UpdateWithIndices(entities, removed, res2, res4, res6, res7)
-}
-
-func (idx *Index) removeEntitiesLocked(removed []string) {
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-
-	for _, id := range removed {
-		oldEntity, ok := idx.entities[id]
-		if !ok {
-			continue
-		}
-		latLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
-		for _, res := range targetResolutions {
-			cell, err := h3.LatLngToCell(latLng, res)
-			if err == nil {
-				idx.globalCellCounts[res][cell]--
-				if idx.globalCellCounts[res][cell] == 0 {
-					delete(idx.globalCellCounts[res], cell)
-				}
-				idx.totalGlobalCounts[res]-- // Decrement total count
-
-				if ids, found := idx.layers[res][cell]; found {
-					for i, existingID := range ids {
-						if existingID == id {
-							// Fast-swap deletion: swap target with last, truncate
-							lastIdx := len(ids) - 1
-							ids[i] = ids[lastIdx]
-							idx.layers[res][cell] = ids[:lastIdx]
-							break
-						}
-					}
-					if len(idx.layers[res][cell]) == 0 {
-						delete(idx.layers[res], cell)
+	// STEP 1: PRE-COMPUTE REMOVAL CELLS (READ LOCK ONLY, NO WRITE LOCK!)
+	var removalJobs []precomputedRemoval
+	if len(removed) > 0 {
+		idx.mu.RLock()
+		for _, id := range removed {
+			if oldEntity, ok := idx.entities[id]; ok {
+				latLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
+				for _, res := range targetResolutions {
+					if cell, err := h3.LatLngToCell(latLng, res); err == nil {
+						removalJobs = append(removalJobs, precomputedRemoval{res: res, cell: cell})
 					}
 				}
 			}
 		}
-		delete(idx.entities, id)
+		idx.mu.RUnlock()
 	}
-}
 
-// ComputeRustIndices computes H3 indices for entities using the Rust engine without locking.
-func (idx *Index) ComputeRustIndices(entities []entity.Entity) (res2, res4, res6, res7 []uint64) {
+	// STEP 2: PRE-COMPUTE NEW INDICES VIA RUST NATIVE CORE (NO LOCKS!)
 	count := len(entities)
-	lats := make([]float64, count)
-	lngs := make([]float64, count)
-	res2 = make([]uint64, count)
-	res4 = make([]uint64, count)
-	res6 = make([]uint64, count)
-	res7 = make([]uint64, count)
-
-	for i, e := range entities {
-		lats[i] = e.Lat
-		lngs[i] = e.Lng
-	}
-
+	var r2, r4, r6, r7 []uint64
 	if count > 0 {
+		r2 = make([]uint64, count)
+		r4 = make([]uint64, count)
+		r6 = make([]uint64, count)
+		r7 = make([]uint64, count)
+		lats := make([]float64, count)
+		lngs := make([]float64, count)
+
+		for i, e := range entities {
+			lats[i] = e.Lat
+			lngs[i] = e.Lng
+		}
+
 		C.compute_resolutions_batch(
 			(*C.double)(unsafe.Pointer(&lats[0])),
 			(*C.double)(unsafe.Pointer(&lngs[0])),
 			C.size_t(count),
-			(*C.uint64_t)(unsafe.Pointer(&res2[0])),
-			(*C.uint64_t)(unsafe.Pointer(&res4[0])),
-			(*C.uint64_t)(unsafe.Pointer(&res6[0])),
-			(*C.uint64_t)(unsafe.Pointer(&res7[0])),
+			(*C.uint64_t)(unsafe.Pointer(&r2[0])),
+			(*C.uint64_t)(unsafe.Pointer(&r4[0])),
+			(*C.uint64_t)(unsafe.Pointer(&r6[0])),
+			(*C.uint64_t)(unsafe.Pointer(&r7[0])),
 		)
 	}
-	return
-}
 
-// UpdateWithIndices updates the spatial index using pre-computed H3 indices.
-func (idx *Index) UpdateWithIndices(entities []entity.Entity, removed []string, res2, res4, res6, res7 []uint64) {
-	idx.removeEntitiesLocked(removed)
-	idx.insertEntitiesLocked(entities, res2, res4, res6, res7)
-}
-
-func (idx *Index) insertEntitiesLocked(entities []entity.Entity, res2, res4, res6, res7 []uint64) {
+	// STEP 3: ATOMIC MEMORY MUTATION GATE (ONE TIGHT, FAST WRITE LOCK!)
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
+	removedSet := make(map[string]struct{}, len(removed))
+	for _, id := range removed {
+		removedSet[id] = struct{}{}
+	}
+
+	// Instant Deletions
+	for _, job := range removalJobs {
+		idx.globalCellCounts[job.res][job.cell]--
+		if idx.globalCellCounts[job.res][job.cell] == 0 {
+			delete(idx.globalCellCounts[job.res], job.cell)
+		}
+		idx.totalGlobalCounts[job.res]--
+
+		if ids, found := idx.layers[job.res][job.cell]; found {
+			for i := 0; i < len(ids); {
+				if _, isRemoved := removedSet[ids[i]]; isRemoved {
+					lastIdx := len(ids) - 1
+					ids[i] = ids[lastIdx]
+					ids = ids[:lastIdx]
+				} else {
+					i++
+				}
+			}
+			idx.layers[job.res][job.cell] = ids
+			if len(idx.layers[job.res][job.cell]) == 0 {
+				delete(idx.layers[job.res], job.cell)
+			}
+		}
+	}
+	for _, id := range removed {
+		delete(idx.entities, id)
+	}
+
+	// Instant Insertions / Updates
 	for i, e := range entities {
 		oldEntity, exists := idx.entities[e.ID]
 		if exists {
 			latLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
 			for _, res := range targetResolutions {
-				oldCell, oldErr := h3.LatLngToCell(latLng, res)
-				if oldErr == nil {
+				if oldCell, oldErr := h3.LatLngToCell(latLng, res); oldErr == nil {
 					idx.globalCellCounts[res][oldCell]--
 					if idx.globalCellCounts[res][oldCell] == 0 {
 						delete(idx.globalCellCounts[res], oldCell)
 					}
-					idx.totalGlobalCounts[res]-- // Decrement total count
+					idx.totalGlobalCounts[res]--
 
 					if ids, found := idx.layers[res][oldCell]; found {
-						for j, existingID := range ids {
-							if existingID == e.ID {
-								// Fast-swap deletion: swap target with last, truncate
+						for j := 0; j < len(ids); {
+							if ids[j] == e.ID {
 								lastIdx := len(ids) - 1
 								ids[j] = ids[lastIdx]
-								idx.layers[res][oldCell] = ids[:lastIdx]
-								break
+								ids = ids[:lastIdx]
+							} else {
+								j++
 							}
 						}
+						idx.layers[res][oldCell] = ids
 						if len(idx.layers[res][oldCell]) == 0 {
 							delete(idx.layers[res], oldCell)
 						}
@@ -200,22 +187,19 @@ func (idx *Index) insertEntitiesLocked(entities []entity.Entity, res2, res4, res
 
 		idx.entities[e.ID] = e
 
-		// Use H3 indices from arguments
-		newCells := [4]h3.Cell{h3.Cell(res2[i]), h3.Cell(res4[i]), h3.Cell(res6[i]), h3.Cell(res7[i])}
+		newCells := [4]h3.Cell{h3.Cell(r2[i]), h3.Cell(r4[i]), h3.Cell(r6[i]), h3.Cell(r7[i])}
 		for j, res := range targetResolutions {
 			cell := newCells[j]
 			if cell == 0 {
 				continue
 			}
 			idx.globalCellCounts[res][cell]++
-			idx.totalGlobalCounts[res]++ // Increment total count
-
+			idx.totalGlobalCounts[res]++
 			idx.layers[res][cell] = append(idx.layers[res][cell], e.ID)
 		}
 	}
 }
 
-// Query returns entities visible in the viewport and cluster counts for surrounding areas.
 func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters map[string]entity.Cluster, err error) {
 	start := time.Now()
 	defer util.LogIfSlow(start, 10*time.Millisecond, "Query")
@@ -231,12 +215,9 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 
 	visible = make([]entity.Entity, 0)
 	clusterCounts := make(map[h3.Cell]int)
-	onlyClusters := vp.Zoom < 6 // True if zoomed out, showing only clusters
+	onlyClusters := vp.Zoom < 6
 
-	// Keep track of entities already added to visible or clusterCounts
 	processedEntities := make(map[string]struct{})
-
-	// 1. Loop over the client's viewport cells - this is now O(viewport cells)
 	viewportCellSet := make(map[h3.Cell]struct{})
 	for _, vc := range viewportCells {
 		viewportCellSet[vc] = struct{}{}
@@ -252,10 +233,8 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 				}
 
 				if !onlyClusters {
-					// Explicitly copy to avoid raw pointer exposure
 					if e, ok := idx.entities[id]; ok {
-						eCopy := e
-						visible = append(visible, eCopy)
+						visible = append(visible, e)
 					}
 				}
 				totalEntitiesInViewport++
@@ -268,58 +247,16 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 		}
 	}
 
-	// 2. O(1) aggregate calculation for out-of-view clusters when zoomed in
 	clusters = make(map[string]entity.Cluster)
 	if !onlyClusters {
 		outOfViewCount := idx.totalGlobalCounts[queryResolution] - totalEntitiesInViewport
 		if outOfViewCount > 0 {
-			// Pass this as a unified metrics key
-			clusters["out_of_view"] = entity.Cluster{
-				Count: outOfViewCount,
-			}
+			clusters["out_of_view"] = entity.Cluster{Count: outOfViewCount}
 		}
 	}
 
-	// Convert cluster cells to entity.Cluster with centroids (only for zoomed out)
 	if onlyClusters {
 		for cell, count := range clusterCounts {
-			latLng, _ := h3.CellToLatLng(cell)
-			clusters[cell.String()] = entity.Cluster{
-				Lat:   latLng.Lat,
-				Lng:   latLng.Lng,
-				Count: count,
-			}
-		}
-	}
-
-	return visible, clusters, nil
-}
-
-func (idx *Index) buildClustersPayload(clusterCounts map[h3.Cell]int, viewportCells []h3.Cell, onlyClusters bool) map[string]entity.Cluster {
-	clusters := make(map[string]entity.Cluster)
-	for cell, count := range clusterCounts {
-		// Determine if this cell is within the viewport
-		inViewport := false
-		for _, vc := range viewportCells {
-			if vc == cell {
-				inViewport = true
-				break
-			}
-		}
-
-		// Logic:
-		// - If in viewport: only cluster if count > 1 OR zoomed out (onlyClusters)
-		// - If outside viewport: cluster if count > 0
-		if inViewport {
-			if count > 1 || onlyClusters {
-				latLng, _ := h3.CellToLatLng(cell)
-				clusters[cell.String()] = entity.Cluster{
-					Lat:   latLng.Lat,
-					Lng:   latLng.Lng,
-					Count: count,
-				}
-			}
-		} else {
 			if count > 0 {
 				latLng, _ := h3.CellToLatLng(cell)
 				clusters[cell.String()] = entity.Cluster{
@@ -330,5 +267,6 @@ func (idx *Index) buildClustersPayload(clusterCounts map[h3.Cell]int, viewportCe
 			}
 		}
 	}
-	return clusters
+
+	return visible, clusters, nil
 }
