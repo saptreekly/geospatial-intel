@@ -93,53 +93,95 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
-	viewportCellSet := make(map[h3.Cell]struct{})
-	for _, cell := range viewportCells {
-		viewportCellSet[cell] = struct{}{}
-	}
-
 	visible = make([]entity.Entity, 0)
 	clusterCounts := make(map[h3.Cell]int)
-	onlyClusters := vp.Zoom < 6
+	onlyClusters := vp.Zoom < 6 // True if zoomed out, showing only clusters
 
-	// Iterate through the cellIndex
-	for indexedCell, entitiesInCell := range idx.cellIndex {
-		// Get the parent H3 cell at the query resolution for the indexed cell
-		entityQueryCell, _ := indexedCell.Parent(queryResolution)
+	// Keep track of entities already added to visible or clusterCounts
+	processedEntities := make(map[string]struct{})
 
-		_, inViewport := viewportCellSet[entityQueryCell]
+	// Loop over the client's viewport cells instead of the global map
+	for _, viewCell := range viewportCells {
+		var cellsToIndex []h3.Cell
+		if queryResolution == indexingResolution {
+			cellsToIndex = []h3.Cell{viewCell}
+		} else { // queryResolution < indexingResolution (zoomed out)
+			children, h3Err := viewCell.Children(indexingResolution)
+			if h3Err != nil {
+				// Handle error, e.g., continue to next viewCell
+				continue
+			}
+			cellsToIndex = children
+		}
 
-		for _, e := range entitiesInCell { // Iterate entities within this indexedCell
-			if inViewport && !onlyClusters {
-				visible = append(visible, e)
-			} else {
-				// Determine cluster resolution
-				clusterResolution := queryResolution
-				if !inViewport {
-					// If outside viewport, cluster at a coarser resolution
-					clusterResolution = queryResolution - 1
-					if clusterResolution < 0 {
-						clusterResolution = 0
+		for _, cell := range cellsToIndex {
+			if entitiesInCell, found := idx.cellIndex[cell]; found {
+				for _, e := range entitiesInCell {
+					if _, alreadyProcessed := processedEntities[e.ID]; alreadyProcessed {
+						continue // Avoid processing same entity multiple times if children overlap
 					}
-				}
-				
-				// Calculate the H3 cell for clustering based on the entity's Lat/Lng
-				// This ensures consistent clustering regardless of indexingResolution
-				clusterCell, err := h3.LatLngToCell(h3.LatLng{Lat: e.Lat, Lng: e.Lng}, clusterResolution)
-				if err == nil { 
-					clusterCounts[clusterCell]++
+
+					// Re-calculate the cell of entity at query resolution to check viewport membership
+					entityQueryCell, h3Err := h3.LatLngToCell(h3.LatLng{Lat: e.Lat, Lng: e.Lng}, queryResolution)
+					if h3Err != nil {
+						continue
+					}
+
+					// Verify if entityQueryCell matches one of the viewportCells
+					inViewport := false
+					for _, vc := range viewportCells {
+						if vc == entityQueryCell {
+							inViewport = true
+							break
+						}
+					}
+
+					if inViewport && !onlyClusters {
+						visible = append(visible, e)
+					}
+					
+					// ALWAYS cluster if onlyClusters is true OR if entity is NOT in viewport
+					if onlyClusters || !inViewport {
+						if entityQueryCell != 0 {
+							clusterCounts[entityQueryCell]++
+						}
+					}
+					processedEntities[e.ID] = struct{}{} // Mark as processed
 				}
 			}
 		}
 	}
-	
+
+	// ALSO iterate over ALL indexed cells to find entities NOT in viewport to cluster them
+	for indexedCell, entitiesInCell := range idx.cellIndex {
+		entityQueryCell, _ := indexedCell.Parent(queryResolution)
+		
+		inViewport := false
+		for _, vc := range viewportCells {
+			if vc == entityQueryCell {
+				inViewport = true
+				break
+			}
+		}
+		
+		if !inViewport {
+			for _, e := range entitiesInCell {
+				if _, alreadyProcessed := processedEntities[e.ID]; alreadyProcessed {
+					continue
+				}
+				clusterCell, h3Err := h3.LatLngToCell(h3.LatLng{Lat: e.Lat, Lng: e.Lng}, queryResolution)
+				if h3Err == nil && clusterCell != 0 {
+					clusterCounts[clusterCell]++
+				}
+				processedEntities[e.ID] = struct{}{}
+			}
+		}
+	}
+
 	// Convert cluster cells to entity.Cluster with centroids
 	clusters = make(map[string]entity.Cluster)
 	for cell, count := range clusterCounts {
-		// Only send clusters with > 1 entity OR if they are outside the viewport
-		// If it's a single entity inside the viewport, it should have been in 'visible' 
-		// unless onlyClusters is true.
-		if count > 1 || onlyClusters {
+		if count > 1 || onlyClusters { // always show clusters if onlyClusters is true, regardless of count
 			latLng, _ := h3.CellToLatLng(cell)
 			clusters[cell.String()] = entity.Cluster{
 				Lat:   latLng.Lat,

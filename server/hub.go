@@ -85,9 +85,6 @@ func (h *Hub) broadcast() {
 			// Compute delta
 			delta := entity.Delta{
 				Seq:      event.Seq,
-				Added:    []entity.Entity{},
-				Updated:  []entity.Entity{},
-				Removed:  []string{},
 				Clusters: clusters,
 			}
 
