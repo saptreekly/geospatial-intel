@@ -99,15 +99,42 @@ func (h *Hub) broadcast() {
 		}
 		h.mu.Unlock()
 
+		// Group clients by Viewport
+		groups := make(map[entity.Viewport][]*Client)
+		for _, c := range clients {
+			groups[c.GetViewport()] = append(groups[c.GetViewport()], c)
+		}
+
 		start := time.Now()
 		clientsSwept := 0
 		totalDeltaPayloadSize := 0
 
-		for _, c := range clients {
-			sent, payloadSize := h.processClientDelta(c, event)
-			if sent {
-				clientsSwept++
-				totalDeltaPayloadSize += payloadSize
+		for vp, clientsInGroup := range groups {
+			// Pre-filter eligible clients for this Viewport
+			var eligible []*Client
+			for _, c := range clientsInGroup {
+				if time.Since(c.lastPush) >= c.minPushInterval {
+					eligible = append(eligible, c)
+				}
+			}
+
+			if len(eligible) == 0 {
+				continue
+			}
+
+			// Query once per group
+			visible, clusters, err := h.store.Query(vp)
+			if err != nil {
+				continue
+			}
+
+			// Compute and send for eligible clients
+			for _, c := range eligible {
+				sent, payloadSize := h.computeAndSend(c, event, visible, clusters)
+				if sent {
+					clientsSwept++
+					totalDeltaPayloadSize += payloadSize
+				}
 			}
 		}
 
@@ -120,18 +147,7 @@ func (h *Hub) broadcast() {
 	}
 }
 
-func (h *Hub) processClientDelta(c *Client, event store.StoreEvent) (bool, int) {
-	// Compute delta for this client
-	visible, clusters, err := h.store.Query(c.GetViewport())
-	if err != nil {
-		return false, 0
-	}
-
-	// Rate-limit pushes
-	if time.Since(c.lastPush) < c.minPushInterval {
-		return false, 0
-	}
-
+func (h *Hub) computeAndSend(c *Client, event store.StoreEvent, visible []entity.Entity, clusters map[string]entity.Cluster) (bool, int) {
 	// Compute delta
 	delta := deltaPool.Get().(*entity.Delta)
 	delta.Seq = event.Seq
@@ -176,7 +192,7 @@ func (h *Hub) processClientDelta(c *Client, event store.StoreEvent) (bool, int) 
 
 	// Send delta
 	select {
-	case c.ch <- *delta: // Need to pass a value, not a pointer, as ch is chan entity.Delta
+	case c.ch <- *delta:
 		c.lastPush = time.Now()
 		deltaPool.Put(delta)
 		return true, payloadSize

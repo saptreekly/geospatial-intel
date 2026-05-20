@@ -80,16 +80,34 @@ func (s *Store) recordHistory(entities []entity.Entity) {
 	if err != nil {
 		return
 	}
-	stmt, err := tx.Prepare("INSERT INTO history (entity_id, timestamp, lat, lng) VALUES (?, ?, ?, ?)")
-	if err != nil {
-		tx.Rollback()
-		return
-	}
-	defer stmt.Close()
 
-	for _, e := range entities {
-		stmt.Exec(e.ID, e.UpdatedAt, e.Lat, e.Lng)
+	const chunkSize = 500
+	for i := 0; i < len(entities); i += chunkSize {
+		end := i + chunkSize
+		if end > len(entities) {
+			end = len(entities)
+		}
+		chunk := entities[i:end]
+
+		// Construct bulk insert
+		numRows := len(chunk)
+		query := "INSERT INTO history (entity_id, timestamp, lat, lng) VALUES "
+		args := make([]interface{}, 0, numRows*4)
+		for j := 0; j < numRows; j++ {
+			if j > 0 {
+				query += ", "
+			}
+			query += "(?, ?, ?, ?)"
+			args = append(args, chunk[j].ID, chunk[j].UpdatedAt, chunk[j].Lat, chunk[j].Lng)
+		}
+
+		_, err := tx.Exec(query, args...)
+		if err != nil {
+			tx.Rollback()
+			return
+		}
 	}
+
 	tx.Commit()
 
 	if time.Since(start) > 200*time.Millisecond {

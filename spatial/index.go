@@ -29,6 +29,13 @@ import (
 
 var targetResolutions = []int{2, 4, 6, 7}
 
+var (
+	visiblePool = sync.Pool{New: func() interface{} { return make([]entity.Entity, 0, 1024) }}
+	clusterCountsPool = sync.Pool{New: func() interface{} { return make(map[h3.Cell]int, 1024) }}
+	processedEntitiesPool = sync.Pool{New: func() interface{} { return make(map[string]struct{}, 1024) }}
+	viewportCellSetPool = sync.Pool{New: func() interface{} { return make(map[h3.Cell]struct{}, 1024) }}
+)
+
 type Index struct {
 	mu                sync.RWMutex
 	entities          map[string]entity.Entity
@@ -152,55 +159,53 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	// Exec Insertions / Updates
 	for i, e := range entities {
 		oldEntity, exists := idx.entities[e.ID]
+		newCells := [4]h3.Cell{h3.Cell(idx.r2Buf[i]), h3.Cell(idx.r4Buf[i]), h3.Cell(idx.r6Buf[i]), h3.Cell(idx.r7Buf[i])}
+
 		if exists {
-			latLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
-			for _, res := range targetResolutions {
-				if oldCell, oldErr := h3.LatLngToCell(latLng, res); oldErr == nil {
+			oldLatLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
+			for j, res := range targetResolutions {
+				oldCell, oldErr := h3.LatLngToCell(oldLatLng, res)
+				newCell := newCells[j]
+				if oldErr != nil || newCell == 0 {
+					continue
+				}
+
+				if oldCell != newCell {
+					// Remove from old cell
 					ids := idx.layers[res][oldCell]
-					for j, existingID := range ids {
-						if existingID == e.ID {
+					for k, id := range ids {
+						if id == e.ID {
 							lastIdx := len(ids) - 1
-							ids[j] = ids[lastIdx]
-							ids = ids[:lastIdx]
-							idx.layers[res][oldCell] = ids
+							ids[k] = ids[lastIdx]
+							idx.layers[res][oldCell] = ids[:lastIdx]
 							idx.globalCellCounts[res][oldCell]--
 							idx.totalGlobalCounts[res]--
 							break
 						}
 					}
+					// Add to new cell
+					idx.layers[res][newCell] = append(idx.layers[res][newCell], e.ID)
+					idx.globalCellCounts[res][newCell]++
+					idx.totalGlobalCounts[res]++
 				}
 			}
-		}
-
-		idx.entities[e.ID] = e
-
-		// Use persistent buffers for new cells (using r2...r7)
-		newCells := [4]h3.Cell{h3.Cell(idx.r2Buf[i]), h3.Cell(idx.r4Buf[i]), h3.Cell(idx.r6Buf[i]), h3.Cell(idx.r7Buf[i])}
-		for j, res := range targetResolutions {
-			cell := newCells[j]
-			if cell == 0 {
-				continue
-			}
-			
-			ids := idx.layers[res][cell]
-			exists := false
-			for _, id := range ids {
-				if id == e.ID {
-					exists = true
-					break
+		} else {
+			// New entity
+			for j, res := range targetResolutions {
+				cell := newCells[j]
+				if cell == 0 {
+					continue
 				}
-			}
-			
-			if !exists {
-				idx.layers[res][cell] = append(ids, e.ID)
+				idx.layers[res][cell] = append(idx.layers[res][cell], e.ID)
 				idx.globalCellCounts[res][cell]++
 				idx.totalGlobalCounts[res]++
 			}
 		}
+		idx.entities[e.ID] = e
 	}
 }
 
-func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters map[string]entity.Cluster, err error) {
+func (idx *Index) Query(vp entity.Viewport) ([]entity.Entity, map[string]entity.Cluster, error) {
 	start := time.Now()
 	defer util.LogIfSlow(start, 10*time.Millisecond, "Query")
 
@@ -213,12 +218,29 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
-	visible = make([]entity.Entity, 0)
-	clusterCounts := make(map[h3.Cell]int)
+	// Get from pools
+	visible := visiblePool.Get().([]entity.Entity)
+	clusterCounts := clusterCountsPool.Get().(map[h3.Cell]int)
+	processedEntities := processedEntitiesPool.Get().(map[string]struct{})
+	viewportCellSet := viewportCellSetPool.Get().(map[h3.Cell]struct{})
+
+	// Defer cleanup and put back
+	defer func() {
+		visible = visible[:0]
+		visiblePool.Put(visible)
+
+		for k := range clusterCounts { delete(clusterCounts, k) }
+		clusterCountsPool.Put(clusterCounts)
+
+		for k := range processedEntities { delete(processedEntities, k) }
+		processedEntitiesPool.Put(processedEntities)
+
+		for k := range viewportCellSet { delete(viewportCellSet, k) }
+		viewportCellSetPool.Put(viewportCellSet)
+	}()
+
 	onlyClusters := vp.Zoom < 6
 
-	processedEntities := make(map[string]struct{})
-	viewportCellSet := make(map[h3.Cell]struct{})
 	for _, vc := range viewportCells {
 		viewportCellSet[vc] = struct{}{}
 	}
@@ -248,7 +270,7 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 		}
 	}
 
-	clusters = make(map[string]entity.Cluster)
+	clusters := make(map[string]entity.Cluster)
 	if !onlyClusters {
 		outOfViewCount := idx.totalGlobalCounts[queryResolution] - totalEntitiesInViewport
 		if outOfViewCount > 0 {
@@ -269,5 +291,9 @@ func (idx *Index) Query(vp entity.Viewport) (visible []entity.Entity, clusters m
 		}
 	}
 
-	return visible, clusters, nil
+	// Copy result visible slice to return, to avoid race/ownership issues
+	finalVisible := make([]entity.Entity, len(visible))
+	copy(finalVisible, visible)
+
+	return finalVisible, clusters, nil
 }
