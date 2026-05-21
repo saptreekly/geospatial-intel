@@ -63,6 +63,18 @@ var deltaPool = sync.Pool{
 	},
 }
 
+var queryBufferPool = sync.Pool{
+	New: func() any {
+		return &struct {
+			Visible  []entity.Entity
+			Clusters map[string]entity.Cluster
+		}{
+			Visible:  make([]entity.Entity, 0, 5000),
+			Clusters: make(map[string]entity.Cluster),
+		}
+	},
+}
+
 // NewHub creates a new Hub.
 func NewHub(s *store.Store) *Hub {
 	h := &Hub{
@@ -132,19 +144,32 @@ func (h *Hub) broadcast() {
 			}
 
 			// Query once per group
-			visible, clusters, err := h.store.Query(vp)
+			buf := queryBufferPool.Get().(*struct {
+				Visible  []entity.Entity
+				Clusters map[string]entity.Cluster
+			})
+			// Reset the tracking collections cleanly
+			buf.Visible = buf.Visible[:0]
+			for k := range buf.Clusters {
+				delete(buf.Clusters, k)
+			}
+
+			// Execute the zero-allocation query pass
+			visible, err := h.store.Query(vp, buf.Visible, buf.Clusters)
 			if err != nil {
+				queryBufferPool.Put(buf)
 				continue
 			}
 
 			// Compute and send for eligible clients
 			for _, c := range eligible {
-				sent, payloadSize := h.computeAndSend(c, event, visible, clusters)
+				sent, payloadSize := h.computeAndSend(c, event, visible, buf.Clusters)
 				if sent {
 					clientsSwept++
 					totalDeltaPayloadSize += payloadSize
 				}
 			}
+			queryBufferPool.Put(buf)
 		}
 
 		elapsed := time.Since(start)
@@ -224,8 +249,19 @@ func (h *Hub) computeAndSend(c *Client, event store.StoreEvent, visible []entity
 func (h *Hub) HandleViewportUpdate(c *Client, vp entity.Viewport) {
 	c.SetViewport(vp)
 
-	visible, clusters, err := h.store.Query(vp)
+	buf := queryBufferPool.Get().(*struct {
+		Visible  []entity.Entity
+		Clusters map[string]entity.Cluster
+	})
+	// Reset the tracking collections cleanly
+	buf.Visible = buf.Visible[:0]
+	for k := range buf.Clusters {
+		delete(buf.Clusters, k)
+	}
+
+	visible, err := h.store.Query(vp, buf.Visible, buf.Clusters)
 	if err != nil {
+		queryBufferPool.Put(buf)
 		return
 	}
 
@@ -240,7 +276,7 @@ func (h *Hub) HandleViewportUpdate(c *Client, vp entity.Viewport) {
 	for k := range delta.Clusters {
 		delete(delta.Clusters, k)
 	}
-	delta.Clusters = clusters
+	delta.Clusters = buf.Clusters
 
 	visibleSet := make(map[string]struct{})
 	for _, e := range visible {
@@ -264,11 +300,13 @@ func (h *Hub) HandleViewportUpdate(c *Client, vp entity.Viewport) {
 
 	if len(delta.Added) == 0 && len(delta.Updated) == 0 && len(delta.Removed) == 0 && len(delta.Clusters) == 0 {
 		deltaPool.Put(delta)
+		queryBufferPool.Put(buf)
 		return
 	}
 
 	deltaBytes, err := json.Marshal(delta)
 	deltaPool.Put(delta)
+	queryBufferPool.Put(buf)
 	if err != nil {
 		return
 	}

@@ -19,7 +19,7 @@ func TestRecordHistoryPerformanceLogging(t *testing.T) {
 	defer os.Remove("osint.db")
 
 	// Generate a massive amount of entities to force a slow transaction
-	count := 50000
+	count := 500000
 	entities := make([]entity.Entity, count)
 	for i := 0; i < count; i++ {
 		entities[i] = entity.Entity{
@@ -32,6 +32,7 @@ func TestRecordHistoryPerformanceLogging(t *testing.T) {
 
 	// This should trigger the critical logging threshold
 	s.recordHistory(entities)
+	s.db.Close() // Flush any remaining state and close file handles
 
 	// Verify log file content
 	content, err := os.ReadFile(logPath)

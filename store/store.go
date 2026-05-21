@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,6 +13,36 @@ import (
 	"github.com/saptreekly/geospatial-intel/spatial"
 	"github.com/saptreekly/geospatial-intel/util"
 )
+
+var entitySlicePool = sync.Pool{
+	New: func() any {
+		// Pre-allocate slice capacity matching our maximum expected batch size
+		slice := make([]entity.Entity, 0, 10000)
+		return &slice
+	},
+}
+
+var dbArgsPool = sync.Pool{
+	New: func() any {
+		// Chunk size 5000 * 4 parameters per row
+		buf := make([]any, 0, 5000*4)
+		return &buf
+	},
+}
+
+var bulkInsertQuery5000 string
+
+func init() {
+	var sb strings.Builder
+	sb.WriteString("INSERT INTO history (entity_id, timestamp, lat, lng) VALUES ")
+	for i := 0; i < 5000; i++ {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("(?, ?, ?, ?)")
+	}
+	bulkInsertQuery5000 = sb.String()
+}
 
 type StoreEvent struct {
 	Seq     uint64
@@ -39,10 +70,10 @@ type Store struct {
 	historyChan chan []entity.Entity
 
 	// Persistent scratchpad buffers
-	addedBuf    []entity.Entity
-	updatedBuf  []entity.Entity
-	removedBuf  []string
-	seenIDsBuf  map[string]struct{}
+	addedBuf   []entity.Entity
+	updatedBuf []entity.Entity
+	removedBuf []string
+	seenIDsBuf map[string]struct{}
 }
 
 func NewStore() *Store {
@@ -81,15 +112,26 @@ func NewStore() *Store {
 func (s *Store) historyWorker() {
 	for entities := range s.historyChan {
 		s.recordHistory(entities)
+		entitySlicePool.Put(&entities) // Recycle the underlying array back to the pool
 	}
 }
 
 func (s *Store) recordHistory(entities []entity.Entity) {
+	if len(entities) == 0 {
+		return
+	}
 	start := time.Now()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return
 	}
+
+	argsPtr := dbArgsPool.Get().(*[]any)
+	args := (*argsPtr)[:0]
+	defer func() {
+		*argsPtr = args // Update the pointer with potentially new capacity if append reallocated
+		dbArgsPool.Put(argsPtr)
+	}()
 
 	const chunkSize = 5000
 	for i := 0; i < len(entities); i += chunkSize {
@@ -98,16 +140,25 @@ func (s *Store) recordHistory(entities []entity.Entity) {
 			end = len(entities)
 		}
 		chunk := entities[i:end]
-
-		// Construct bulk insert
 		numRows := len(chunk)
-		query := "INSERT INTO history (entity_id, timestamp, lat, lng) VALUES "
-		args := make([]interface{}, 0, numRows*4)
-		for j := 0; j < numRows; j++ {
-			if j > 0 {
-				query += ", "
+		args = args[:0]
+
+		var query string
+		if numRows == chunkSize {
+			query = bulkInsertQuery5000
+		} else {
+			var sb strings.Builder
+			sb.WriteString("INSERT INTO history (entity_id, timestamp, lat, lng) VALUES ")
+			for j := 0; j < numRows; j++ {
+				if j > 0 {
+					sb.WriteString(", ")
+				}
+				sb.WriteString("(?, ?, ?, ?)")
 			}
-			query += "(?, ?, ?, ?)"
+			query = sb.String()
+		}
+
+		for j := 0; j < numRows; j++ {
 			args = append(args, chunk[j].ID, chunk[j].UpdatedAt, chunk[j].Lat, chunk[j].Lng)
 		}
 
@@ -169,9 +220,10 @@ func (s *Store) Apply(entities []entity.Entity) {
 
 	// Prepare data for background workers
 	totalChanges := len(s.addedBuf) + len(s.updatedBuf)
-	combined := make([]entity.Entity, totalChanges)
-	copy(combined, s.addedBuf)
-	copy(combined[len(s.addedBuf):], s.updatedBuf)
+	combinedPtr := entitySlicePool.Get().(*[]entity.Entity)
+	combined := (*combinedPtr)[:0] // Reset length to 0 while keeping capacity
+	combined = append(combined, s.addedBuf...)
+	combined = append(combined, s.updatedBuf...)
 
 	// Pure isolated background FFI computation (requires index lock internally)
 	s.index.BatchUpdateRust(combined, s.removedBuf)
@@ -180,6 +232,8 @@ func (s *Store) Apply(entities []entity.Entity) {
 	select {
 	case s.historyChan <- combined:
 	default:
+		// If channel is full, recycle immediately to prevent a memory leak
+		entitySlicePool.Put(&combined)
 	}
 
 	// Subscriptions
@@ -188,8 +242,12 @@ func (s *Store) Apply(entities []entity.Entity) {
 		Changed: make([]string, totalChanges),
 		Removed: make([]string, len(s.removedBuf)),
 	}
-	for i, e := range s.addedBuf { event.Changed[i] = e.ID }
-	for i, e := range s.updatedBuf { event.Changed[len(s.addedBuf)+i] = e.ID }
+	for i, e := range s.addedBuf {
+		event.Changed[i] = e.ID
+	}
+	for i, e := range s.updatedBuf {
+		event.Changed[len(s.addedBuf)+i] = e.ID
+	}
 	copy(event.Removed, s.removedBuf)
 
 	for _, ch := range s.subs {
@@ -221,14 +279,13 @@ func (s *Store) Unsubscribe(sub *Subscription) {
 	}
 }
 
-func (s *Store) Query(vp entity.Viewport) (visible []entity.Entity, clusters map[string]entity.Cluster, err error) {
-	return s.index.Query(vp)
+func (s *Store) Query(vp entity.Viewport, outVisible []entity.Entity, outClusters map[string]entity.Cluster) ([]entity.Entity, error) {
+	return s.index.Query(vp, outVisible, outClusters)
 }
 
 func (s *Store) Seq() uint64 {
 	return s.seq.Load()
 }
-
 
 func (s *Store) GetHistory(id string) ([]entity.Entity, error) {
 	rows, err := s.db.Query("SELECT timestamp, lat, lng FROM history WHERE entity_id = ? ORDER BY timestamp DESC LIMIT 100", id)

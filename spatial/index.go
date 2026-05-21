@@ -111,6 +111,14 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
+	count := len(entities)
+	if len(idx.entities) == 0 && count > 0 {
+		// Pre-size map bucket tables to completely eliminate bucket splitting and rehashing churn
+		idx.entities = make(map[string]entity.Entity, count)
+		idx.entityIDToInternalID = make(map[string]uint32, count)
+		idx.entityCells = make(map[uint32][5]h3.Cell, count)
+	}
+
 	// STEP 1: PRE-COMPUTE REMOVALS
 	var removalJobs []precomputedRemoval
 	if len(removed) > 0 {
@@ -126,7 +134,6 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	}
 
 	// STEP 2: PRE-COMPUTE NEW INDICES VIA NATIVE RUST CORE
-	count := len(entities)
 	if count > 0 {
 		if count > cap(idx.latsBuf) {
 			idx.latsBuf = make([]float64, count)
@@ -229,6 +236,9 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 						}
 					}
 					// Add to new cell
+					if len(idx.layers[res][newCell]) == 0 {
+						idx.layers[res][newCell] = make([]uint32, 0, 8)
+					}
 					idx.layers[res][newCell] = append(idx.layers[res][newCell], internalID)
 					idx.globalCellCounts[res][newCell]++
 					idx.totalGlobalCounts[res]++
@@ -241,6 +251,9 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 				if cell == 0 {
 					continue
 				}
+				if len(idx.layers[res][cell]) == 0 {
+					idx.layers[res][cell] = make([]uint32, 0, 8)
+				}
 				idx.layers[res][cell] = append(idx.layers[res][cell], internalID)
 				idx.globalCellCounts[res][cell]++
 				idx.totalGlobalCounts[res]++
@@ -251,7 +264,7 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	}
 }
 
-func (idx *Index) Query(vp entity.Viewport) ([]entity.Entity, map[string]entity.Cluster, error) {
+func (idx *Index) Query(vp entity.Viewport, outVisible []entity.Entity, outClusters map[string]entity.Cluster) ([]entity.Entity, error) {
 	start := time.Now()
 	defer util.LogIfSlow(start, 10*time.Millisecond, "Query")
 
@@ -292,7 +305,7 @@ func (idx *Index) Query(vp entity.Viewport) ([]entity.Entity, map[string]entity.
 	if !vp.IsGlobal() {
 		viewportCells, err := ViewportToCells(vp, queryResolution)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		for _, vc := range viewportCells {
 			viewportCellSet[vc] = struct{}{}
@@ -375,11 +388,10 @@ func (idx *Index) Query(vp entity.Viewport) ([]entity.Entity, map[string]entity.
 		}
 	}
 
-	clusters := make(map[string]entity.Cluster)
 	if !onlyClusters {
 		outOfViewCount := idx.totalGlobalCounts[queryResolution] - totalEntitiesInViewport
 		if outOfViewCount > 0 {
-			clusters["out_of_view"] = entity.Cluster{Count: outOfViewCount}
+			outClusters["out_of_view"] = entity.Cluster{Count: outOfViewCount}
 		}
 	}
 
@@ -387,7 +399,7 @@ func (idx *Index) Query(vp entity.Viewport) ([]entity.Entity, map[string]entity.
 		for cell, count := range clusterCounts {
 			if count > 0 {
 				latLng, _ := h3.CellToLatLng(cell)
-				clusters[cell.String()] = entity.Cluster{
+				outClusters[cell.String()] = entity.Cluster{
 					Lat:   latLng.Lat,
 					Lng:   latLng.Lng,
 					Count: count,
@@ -396,9 +408,6 @@ func (idx *Index) Query(vp entity.Viewport) ([]entity.Entity, map[string]entity.
 		}
 	}
 
-	// Copy result visible slice to return, to avoid race/ownership issues
-	finalVisible := make([]entity.Entity, len(visible))
-	copy(finalVisible, visible)
-
-	return finalVisible, clusters, nil
+	outVisible = append(outVisible, visible...)
+	return outVisible, nil
 }

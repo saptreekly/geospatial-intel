@@ -165,7 +165,9 @@ func TestQuery_Visible(t *testing.T) {
 	idx.BatchUpdateRust([]entity.Entity{e1, e2, e3}, nil)
 
 	vpLA := entity.Viewport{North: 34.2, South: 33.9, East: -118.1, West: -118.4, Zoom: 7}
-	visible, clusters, err := idx.Query(vpLA)
+	visible := make([]entity.Entity, 0, 100)
+	clusters := make(map[string]entity.Cluster)
+	visible, err := idx.Query(vpLA, visible, clusters)
 	if err != nil {
 		t.Fatalf("Query returned error: %v", err)
 	}
@@ -191,7 +193,9 @@ func TestQuery_Clusters(t *testing.T) {
 
 	// Query at zoom 0 (resolution 3) -> Should be clustered
 	vp := entity.Viewport{North: 1.0, South: -1.0, East: 1.0, West: -1.0, Zoom: 0}
-	_, clusters, _ := idx.Query(vp)
+	visible := make([]entity.Entity, 0, 100)
+	clusters := make(map[string]entity.Cluster)
+	_, _ = idx.Query(vp, visible, clusters)
 
 	if len(clusters) == 0 {
 		t.Errorf("Expected at least one cluster, got 0")
@@ -218,7 +222,9 @@ func TestQuery_Mixed(t *testing.T) {
 
 	// Query with viewport covering only e3 and e4
 	vp := entity.Viewport{North: 11.0, South: 9.0, East: 11.0, West: 9.0, Zoom: 7}
-	visible, clusters, _ := idx.Query(vp)
+	visible := make([]entity.Entity, 0, 100)
+	clusters := make(map[string]entity.Cluster)
+	visible, _ = idx.Query(vp, visible, clusters)
 
 	if len(visible) != 2 {
 		t.Errorf("Expected 2 visible entities, got %d", len(visible))
@@ -242,7 +248,9 @@ func TestQuery_EmptyIndex(t *testing.T) {
 		North: 90.0, South: -90.0, East: 180.0, West: -180.0, Zoom: 7,
 	}
 
-	visible, clusters, err := idx.Query(vp)
+	visible := make([]entity.Entity, 0, 100)
+	clusters := make(map[string]entity.Cluster)
+	visible, err := idx.Query(vp, visible, clusters)
 	if err != nil {
 		t.Fatalf("Query returned error: %v", err)
 	}
@@ -295,7 +303,9 @@ func TestQuery_BoundaryMovement(t *testing.T) {
 	vp := entity.Viewport{North: 1.0, South: -1.0, East: 1.0, West: -1.0, Zoom: 7}
 	
 	// Query 1: Entity visible
-	visible, _, _ := idx.Query(vp)
+	visible := make([]entity.Entity, 0, 100)
+	clusters := make(map[string]entity.Cluster)
+	visible, _ = idx.Query(vp, visible, clusters)
 	if len(visible) != 1 {
 		t.Errorf("Expected 1 visible entity, got %d", len(visible))
 	}
@@ -305,7 +315,9 @@ func TestQuery_BoundaryMovement(t *testing.T) {
 	idx.BatchUpdateRust([]entity.Entity{e1Updated}, nil)
 
 	// Query 2: Entity not visible (should be in clusters if outside)
-	visible, clusters, _ := idx.Query(vp)
+	visible = make([]entity.Entity, 0, 100)
+	clusters = make(map[string]entity.Cluster)
+	visible, _ = idx.Query(vp, visible, clusters)
 	if len(visible) != 0 {
 		t.Errorf("Expected 0 visible entities, got %d", len(visible))
 	}
@@ -322,14 +334,18 @@ func TestQuery_ZoomTransition(t *testing.T) {
 
 	// Zoomed in (Resolution 7) -> Visible
 	vpIn := entity.Viewport{North: 1.0, South: -1.0, East: 1.0, West: -1.0, Zoom: 7}
-	visibleIn, _, _ := idx.Query(vpIn)
+	visibleIn := make([]entity.Entity, 0, 100)
+	clustersIn := make(map[string]entity.Cluster)
+	visibleIn, _ = idx.Query(vpIn, visibleIn, clustersIn)
 	if len(visibleIn) != 1 {
 		t.Errorf("Expected 1 visible entity, got %d", len(visibleIn))
 	}
 
 	// Zoomed out (Resolution 3) -> Clustered
 	vpOut := entity.Viewport{North: 90.0, South: -90.0, East: 180.0, West: -180.0, Zoom: 0}
-	visibleOut, clustersOut, _ := idx.Query(vpOut)
+	visibleOut := make([]entity.Entity, 0, 100)
+	clustersOut := make(map[string]entity.Cluster)
+	visibleOut, _ = idx.Query(vpOut, visibleOut, clustersOut)
 	if len(visibleOut) != 0 {
 		t.Errorf("Expected 0 visible entities, got %d", len(visibleOut))
 	}
@@ -371,7 +387,9 @@ func TestIndex_ConcurrentAccessStress(t *testing.T) {
 				vp := entity.Viewport{
 					North: 90, South: -90, East: 180, West: -180, Zoom: 7,
 				}
-				_, _, _ = idx.Query(vp)
+				visible := make([]entity.Entity, 0, 100)
+				clusters := make(map[string]entity.Cluster)
+				_, _ = idx.Query(vp, visible, clusters)
 			}
 		}(i)
 	}

@@ -115,6 +115,8 @@ var indexHTML = `<!DOCTYPE html>
         import initWasm, { RadarEngine } from '/wasm/frontend_wasm.js';
 
         let radarEngine;
+        let wasm;
+        const persistentGeoJSON = { type: 'FeatureCollection', features: [] };
         const markers = new Map();
         let map;
         let ws;
@@ -123,7 +125,7 @@ var indexHTML = `<!DOCTYPE html>
         const UPDATE_INTERVAL = 25000; // 25 second polling window matching backend seeder
 
         async function init() {
-            await initWasm();
+            wasm = await initWasm();
             radarEngine = new RadarEngine();
 
             // 1. Initialize the native hardware-accelerated map
@@ -196,18 +198,41 @@ var indexHTML = `<!DOCTYPE html>
         }
 
         function animatePlanes() {
-            if (!map || !map.getSource('aircraft') || !radarEngine) {
+            if (!map || !map.getSource('aircraft') || !radarEngine || !wasm) {
                 requestAnimationFrame(animatePlanes);
                 return;
             }
 
             const now = performance.now();
+            radarEngine.tick(now, UPDATE_INTERVAL);
 
-            // Let Rust calculate coordinates and return a pre-compiled WebGL GeoJSON object
-            const geojson = radarEngine.tick(now, UPDATE_INTERVAL);
-            map.getSource('aircraft').setData(geojson);
+            const count = radarEngine.get_total_count();
+            const ptr = radarEngine.get_data_ptr();
+            // Access WASM memory directly without allocations
+            const data = new Float64Array(wasm.memory.buffer, ptr, count * 4);
 
-            document.getElementById('status').innerText = radarEngine.get_total_count() + " TARGETS TRACKING (WASM-60 FPS)";
+            // Synchronize persistent GeoJSON features with raw data
+            if (persistentGeoJSON.features.length !== count) {
+                persistentGeoJSON.features = new Array(count);
+                for (let i = 0; i < count; i++) {
+                    persistentGeoJSON.features[i] = {
+                        type: 'Feature',
+                        geometry: { type: 'Point', coordinates: [0, 0] },
+                        properties: { id: '', heading: 0 }
+                    };
+                }
+            }
+
+            for (let i = 0; i < count; i++) {
+                const offset = i * 4;
+                const feat = persistentGeoJSON.features[i];
+                feat.geometry.coordinates[0] = data[offset];     // lng
+                feat.geometry.coordinates[1] = data[offset + 1]; // lat
+                feat.properties.heading = data[offset + 2];      // heading
+            }
+
+            map.getSource('aircraft').setData(persistentGeoJSON);
+            document.getElementById('status').innerText = count + " TARGETS TRACKING (WASM-ZERO-COPY)";
             requestAnimationFrame(animatePlanes);
         }
 
