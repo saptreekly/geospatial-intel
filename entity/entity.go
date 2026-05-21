@@ -14,6 +14,8 @@ type Entity struct {
 	Heading   float64 `json:"heading"`
 	Speed     float64 `json:"speed"`
 	CallSign  string  `json:"callSign"`
+	Origin    string  `json:"origin,omitempty"`
+	Destination string  `json:"destination,omitempty"`
 	UpdatedAt int64   `json:"updatedAt"` // unix seconds
 	Version   uint64  `json:"-"`         // internal monotonic counter
 }
@@ -124,7 +126,11 @@ func (d *Delta) writeEntityFast(sb *strings.Builder, e *Entity) {
 	sb.WriteString(strconv.FormatFloat(e.Speed, 'f', 1, 64))
 	sb.WriteString(`,"callSign":"`)
 	sb.WriteString(e.CallSign)
+	sb.WriteString(`","origin":"`)
+	sb.WriteString(e.Origin)
+	sb.WriteString(`","destination":"`)
+	sb.WriteString(e.Destination)
 	sb.WriteString(`","updatedAt":`)
 	sb.WriteString(strconv.FormatInt(e.UpdatedAt, 10))
 	sb.WriteString(`}`)
-}
+	}

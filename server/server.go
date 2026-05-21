@@ -253,25 +253,28 @@ var indexHTML = `<!DOCTYPE html>
             if (selectedTargetID && map.getSource('aircraft-history')) {
                 const historySource = map.getSource('aircraft-history');
                 const currentData = historySource._data; // Read current GeoJSON state securely
-                
+
                 if (currentData && currentData.features && currentData.features.length > 0) {
-                    // Locate the live coordinates of our target from the active markers cache
-                    const activeTarget = markers.get(selectedTargetID);
-                    if (activeTarget && radarEngine) {
-                        // Find the target's current position within the active WASM engine
-                        const targetIndex = Array.from(markers.keys()).indexOf(selectedTargetID);
-                        if (targetIndex !== -1) {
-                            const offset = targetIndex * 4;
-                            const liveLng = data[offset];
-                            const liveLat = data[offset + 1];
-                            
-                            // Update the last coordinate feature string of the active leg dynamically
-                            const activeFeature = currentData.features[currentData.features.length - 1];
-                            const coords = activeFeature.geometry.coordinates;
-                            if (coords.length > 0) {
-                                coords[coords.length - 1] = [liveLng, liveLat];
-                                historySource.setData(currentData); // Redraw trail anchor zero-copy
-                            }
+                    const targetHash = hashId(selectedTargetID);
+                    let liveLng = null;
+                    let liveLat = null;
+
+                    // Scan the raw WASM float buffer directly for our target's matching identifier hash
+                    for (let i = 0; i < count; i++) {
+                        if (data[i * 4 + 3] === targetHash) {
+                            liveLng = data[i * 4];
+                            liveLat = data[i * 4 + 1];
+                            break;
+                        }
+                    }
+
+                    // Snapping anchor execution phase
+                    if (liveLng !== null && liveLat !== null) {
+                        const activeFeature = currentData.features[currentData.features.length - 1];
+                        const coords = activeFeature.geometry.coordinates;
+                        if (coords.length > 0) {
+                            coords[coords.length - 1] = [liveLng, liveLat];
+                            historySource.setData(currentData); // Redraw trail anchor zero-copy
                         }
                     }
                 }
