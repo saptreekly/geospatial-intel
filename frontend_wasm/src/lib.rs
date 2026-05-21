@@ -36,6 +36,10 @@ pub struct Aircraft {
     #[serde(default)]
     pub target_lat: f64,
     #[serde(default)]
+    pub start_heading: f64,
+    #[serde(default)]
+    pub target_heading: f64,
+    #[serde(default)]
     pub start_time: f64,
 }
 
@@ -67,6 +71,8 @@ impl RadarEngine {
             ac.start_lng = ac.lng; ac.start_lat = ac.lat;
             ac.current_lng = ac.lng; ac.current_lat = ac.lat;
             ac.target_lng = ac.lng; ac.target_lat = ac.lat;
+            ac.start_heading = ac.heading;
+            ac.target_heading = ac.heading;
             ac.start_time = now;
             self.targets.insert(ac.id.clone(), ac);
         }
@@ -77,6 +83,8 @@ impl RadarEngine {
                 old.start_lat = old.current_lat;
                 old.target_lng = ac.lng;
                 old.target_lat = ac.lat;
+                old.start_heading = old.heading;
+                old.target_heading = ac.heading;
                 old.heading = ac.heading;
                 old.speed = ac.speed;
                 old.altitude = ac.altitude;
@@ -98,6 +106,14 @@ impl RadarEngine {
             let t = (elapsed / interval).min(1.0).max(0.0);
             d.current_lng = d.start_lng + (d.target_lng - d.start_lng) * t;
             d.current_lat = d.start_lat + (d.target_lat - d.start_lat) * t;
+
+            // Shortest angular arc vector loop configuration
+            let mut heading_delta = d.target_heading - d.start_heading;
+            if heading_delta > 180.0 { heading_delta -= 360.0; }
+            else if heading_delta < -180.0 { heading_delta += 360.0; }
+
+            // Smoothly interpolate heading angle frame-by-frame
+            d.heading = (d.start_heading + heading_delta * t + 360.0) % 360.0;
         }
     }
 

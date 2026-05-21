@@ -114,8 +114,19 @@ var indexHTML = `<!DOCTYPE html>
     <script type="module">
         import initWasm, { RadarEngine } from '/wasm/frontend_wasm.js';
 
+        let selectedTargetID = null;
+        const hashToId = new Map();
         let radarEngine;
         let wasm;
+        
+        function hashId(id) {
+            let h = 0;
+            for (let i = 0; i < id.length; i++) {
+                h = Math.imul(h, 31) + id.charCodeAt(i);
+                h = h >>> 0;
+            }
+            return h;
+        }
         const persistentGeoJSON = { type: 'FeatureCollection', features: [] };
         const markers = new Map();
         let map;
@@ -182,7 +193,10 @@ var indexHTML = `<!DOCTYPE html>
                     // Interaction Handlers
                     map.on('click', 'aircraft-layer', (e) => {
                         const f = e.features[0];
-                        if (f) showTargetTelemetry(f.properties.id);
+                        if (f) {
+                            selectedTargetID = f.properties.id;
+                            showTargetTelemetry(f.properties.id);
+                        }
                     });
                     map.on('mouseenter', 'aircraft-layer', () => map.getCanvas().style.cursor = 'pointer');
                     map.on('mouseleave', 'aircraft-layer', () => map.getCanvas().style.cursor = '');
@@ -229,10 +243,40 @@ var indexHTML = `<!DOCTYPE html>
                 feat.geometry.coordinates[0] = data[offset];     // lng
                 feat.geometry.coordinates[1] = data[offset + 1]; // lat
                 feat.properties.heading = data[offset + 2];      // heading
+                feat.properties.id = hashToId.get(data[offset + 3]); // Map hash back to ID string
             }
 
             map.getSource('aircraft').setData(persistentGeoJSON);
             document.getElementById('status').innerText = count + " TARGETS TRACKING (WASM-ZERO-COPY)";
+
+            // Dynamic Trail-to-Target Locking Anchor
+            if (selectedTargetID && map.getSource('aircraft-history')) {
+                const historySource = map.getSource('aircraft-history');
+                const currentData = historySource._data; // Read current GeoJSON state securely
+                
+                if (currentData && currentData.features && currentData.features.length > 0) {
+                    // Locate the live coordinates of our target from the active markers cache
+                    const activeTarget = markers.get(selectedTargetID);
+                    if (activeTarget && radarEngine) {
+                        // Find the target's current position within the active WASM engine
+                        const targetIndex = Array.from(markers.keys()).indexOf(selectedTargetID);
+                        if (targetIndex !== -1) {
+                            const offset = targetIndex * 4;
+                            const liveLng = data[offset];
+                            const liveLat = data[offset + 1];
+                            
+                            // Update the last coordinate feature string of the active leg dynamically
+                            const activeFeature = currentData.features[currentData.features.length - 1];
+                            const coords = activeFeature.geometry.coordinates;
+                            if (coords.length > 0) {
+                                coords[coords.length - 1] = [liveLng, liveLat];
+                                historySource.setData(currentData); // Redraw trail anchor zero-copy
+                            }
+                        }
+                    }
+                }
+            }
+
             requestAnimationFrame(animatePlanes);
         }
 
@@ -259,6 +303,26 @@ var indexHTML = `<!DOCTYPE html>
 
                     // Sort ascending (oldest logs first)
                     const sortedHistory = [...historyData].sort((a, b) => a.updatedAt - b.updatedAt);
+                    
+                    let verticalTrendSymbol = " ⟷"; // Default steady cruise level icon
+                    if (sortedHistory.length >= 2) {
+                        const latestAlt = sortedHistory[sortedHistory.length - 1].altitude;
+                        const priorAlt = sortedHistory[sortedHistory.length - 2].altitude;
+                        const altDelta = latestAlt - priorAlt;
+                        
+                        if (altDelta > 100) { verticalTrendSymbol = " ↗ CLIMBING"; }
+                        else if (altDelta < -100) { verticalTrendSymbol = " ↘ DESCENDING"; }
+                    }
+
+                    // Re-populate metadata with updated trend indicator
+                    document.getElementById('panel-content').innerHTML = 
+                        '<div class="panel-row"><b>ICAO24:</b> ' + p.id + '</div>' +
+                        '<div class="panel-row"><b>CALLSIGN:</b> ' + (p.callSign || 'UNKNOWN') + '</div>' +
+                        '<div class="panel-row"><b>SOURCE:</b> ' + p.source.toUpperCase() + '</div>' +
+                        '<div class="panel-row"><b>SPEED:</b> ' + Math.round(p.speed) + ' kn</div>' +
+                        '<div class="panel-row"><b>ALTITUDE:</b> ' + Math.round(p.altitude) + ' ft' + verticalTrendSymbol + '</div>' +
+                        '<div class="panel-row"><b>HEADING:</b> ' + Math.round(p.heading) + '°</div>' +
+                        '<div class="panel-row"><b>LAT/LNG:</b> ' + p.lat.toFixed(4) + ', ' + p.lng.toFixed(4) + '</div>';
 
                     // Isolate ONLY the most recent continuous flight leg by walking backward from the latest point
                     const activeCoordinates = [];
@@ -272,7 +336,15 @@ var indexHTML = `<!DOCTYPE html>
                         if (gapSeconds > 900) {
                             break;
                         }
-                        activeCoordinates.push([sortedHistory[i].lng, sortedHistory[i].lat]);
+
+                        let nextLng = sortedHistory[i].lng;
+                        let prevLng = activeCoordinates[activeCoordinates.length - 1][0];
+
+                        // Anti-meridian spanning correction
+                        if (nextLng - prevLng > 180) { nextLng -= 360; }
+                        else if (nextLng - prevLng < -180) { nextLng += 360; }
+
+                        activeCoordinates.push([nextLng, sortedHistory[i].lat]);
                     }
 
                     // Restore chronological order for MapLibre LineString rendering
@@ -294,6 +366,7 @@ var indexHTML = `<!DOCTYPE html>
         }
 
         window.closePanel = function() {
+            selectedTargetID = null;
             document.getElementById('side-panel').classList.remove('open');
             map.getSource('aircraft-history').setData({ type: 'FeatureCollection', features: [] });
         }
@@ -326,9 +399,15 @@ var indexHTML = `<!DOCTYPE html>
             console.log("Delta received:", { added: delta.added?.length, updated: delta.updated?.length, removed: delta.removed?.length });
 
             // Sync standard cache for local sidebar details panel queries
-            if (delta.added) delta.added.forEach(e => markers.set(e.id, e));
+            if (delta.added) delta.added.forEach(e => {
+                markers.set(e.id, e);
+                hashToId.set(hashId(e.id), e.id);
+            });
             if (delta.updated) delta.updated.forEach(e => markers.set(e.id, e));
-            if (delta.removed) delta.removed.forEach(id => markers.delete(id));
+            if (delta.removed) delta.removed.forEach(id => {
+                markers.delete(id);
+                // Note: Not removing from hashToId is fine, it's just a cache
+            });
 
             // Pipe updates directly into Rust's linear allocator memory heap
             if (radarEngine) {
