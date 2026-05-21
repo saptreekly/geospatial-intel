@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/http"
 	"time"
 
@@ -19,6 +20,7 @@ type Server struct {
 
 // NewServer creates a new HTTP server.
 func NewServer(addr string, s *store.Store, minPushInterval time.Duration) *Server {
+	mime.AddExtensionType(".wasm", "application/wasm")
 	hub := NewHub(s)
 	srv := &Server{
 		Server: http.Server{
@@ -43,6 +45,9 @@ func NewServer(addr string, s *store.Store, minPushInterval time.Duration) *Serv
 	mux.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
 		StreamHandler(context.Background(), w, r, hub, minPushInterval)
 	})
+
+	fs := http.FileServer(http.Dir("./static/wasm"))
+	mux.Handle("/wasm/", http.StripPrefix("/wasm/", fs))
 
 	mux.HandleFunc("/api/history", func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
@@ -106,7 +111,10 @@ var indexHTML = `<!DOCTYPE html>
         <h3>TARGET DATA</h3>
         <div id="panel-content">Select a target for interception telemetry.</div>
     </div>
-    <script>
+    <script type="module">
+        import initWasm, { RadarEngine } from '/wasm/frontend_wasm.js';
+
+        let radarEngine;
         const markers = new Map();
         let map;
         let ws;
@@ -114,7 +122,10 @@ var indexHTML = `<!DOCTYPE html>
         const PLANE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24"><path d="M21,16V14L13,9V3.5A1.5,1.5 0 0,0 11.5,2A1.5,1.5 0 0,0 10,3.5V9L2,14V16L10,13.5V19L8,20.5V22L11.5,21L15,22V20.5L13,19V13.5L21,16Z" fill="#00ff78" stroke="#111" stroke-width="0.5"/></svg>';
         const UPDATE_INTERVAL = 25000; // 25 second polling window matching backend seeder
 
-        function init() {
+        async function init() {
+            await initWasm();
+            radarEngine = new RadarEngine();
+
             // 1. Initialize the native hardware-accelerated map
             map = new maplibregl.Map({
                 container: 'map',
@@ -185,33 +196,18 @@ var indexHTML = `<!DOCTYPE html>
         }
 
         function animatePlanes() {
-            if (!map || !map.getSource('aircraft')) {
+            if (!map || !map.getSource('aircraft') || !radarEngine) {
                 requestAnimationFrame(animatePlanes);
                 return;
             }
 
             const now = performance.now();
-            const aircraftData = Array.from(markers.values());
 
-            aircraftData.forEach(d => {
-                const elapsed = now - d.startTime;
-                const t = Math.min(1, elapsed / UPDATE_INTERVAL);
-
-                // Smoothly ease position coordinates over the timeline matrix
-                d.currentLng = d.startLng + (d.targetLng - d.startLng) * t;
-                d.currentLat = d.startLat + (d.targetLat - d.startLat) * t;
-            });
-
-            const geojson = {
-                type: 'FeatureCollection',
-                features: aircraftData.map(d => ({
-                    type: 'Feature',
-                    geometry: { type: 'Point', coordinates: [d.currentLng, d.currentLat] },
-                    properties: { id: d.id, heading: d.heading || 0 }
-                }))
-            };
-
+            // Let Rust calculate coordinates and return a pre-compiled WebGL GeoJSON object
+            const geojson = radarEngine.tick(now, UPDATE_INTERVAL);
             map.getSource('aircraft').setData(geojson);
+
+            document.getElementById('status').innerText = radarEngine.get_total_count() + " TARGETS TRACKING (WASM-60 FPS)";
             requestAnimationFrame(animatePlanes);
         }
 
@@ -238,43 +234,49 @@ var indexHTML = `<!DOCTYPE html>
 
                     // Sort ascending (oldest logs first)
                     const sortedHistory = [...historyData].sort((a, b) => a.updatedAt - b.updatedAt);
-                    const features = [];
-                    let currentSegment = [];
 
-                    for (let i = 0; i < sortedHistory.length; i++) {
-                        if (i > 0 && (sortedHistory[i].updatedAt - sortedHistory[i-1].updatedAt) > 900) {
-                            if (currentSegment.length >= 2) {
-                                features.push({
-                                    type: 'Feature',
-                                    geometry: { type: 'LineString', coordinates: currentSegment }
-                                });
-                            }
-                            currentSegment = [];
+                    // Isolate ONLY the most recent continuous flight leg by walking backward from the latest point
+                    const activeCoordinates = [];
+                    const lastPoint = sortedHistory[sortedHistory.length - 1];
+                    activeCoordinates.push([lastPoint.lng, lastPoint.lat]);
+
+                    for (let i = sortedHistory.length - 2; i >= 0; i--) {
+                        const gapSeconds = sortedHistory[i+1].updatedAt - sortedHistory[i].updatedAt;
+
+                        // Break immediately if a gap wider than 15 minutes is found (indicates a past flight leg)
+                        if (gapSeconds > 900) {
+                            break;
                         }
-                        currentSegment.push([sortedHistory[i].lng, sortedHistory[i].lat]);
-                    }
-                    if (currentSegment.length >= 2) {
-                        features.push({
-                            type: 'Feature',
-                            geometry: { type: 'LineString', coordinates: currentSegment }
-                        });
+                        activeCoordinates.push([sortedHistory[i].lng, sortedHistory[i].lat]);
                     }
 
-                    map.getSource('aircraft-history').setData({
-                        type: 'FeatureCollection',
-                        features: features
-                    });
+                    // Restore chronological order for MapLibre LineString rendering
+                    activeCoordinates.reverse();
+
+                    if (activeCoordinates.length >= 2) {
+                        map.getSource('aircraft-history').setData({
+                            type: 'FeatureCollection',
+                            features: [{
+                                type: 'Feature',
+                                geometry: { type: 'LineString', coordinates: activeCoordinates }
+                            }]
+                        });
+                    } else {
+                        map.getSource('aircraft-history').setData({ type: 'FeatureCollection', features: [] });
+                    }
                 })
                 .catch(err => console.error("Error loading trail telemetry:", err));
         }
 
-        function closePanel() {
+        window.closePanel = function() {
             document.getElementById('side-panel').classList.remove('open');
             map.getSource('aircraft-history').setData({ type: 'FeatureCollection', features: [] });
         }
 
         function sendViewport() {
-            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            if (!ws || ws.readyState !== WebSocket.OPEN || !map) {
+                return;
+            }
             const bounds = map.getBounds();
             const north = Math.min(89.9, bounds.getNorth());
             const south = Math.max(-89.9, bounds.getSouth());
@@ -296,34 +298,17 @@ var indexHTML = `<!DOCTYPE html>
 
         function processDelta(delta) {
             const now = performance.now();
-            if (delta.added) {
-                delta.added.forEach(e => {
-                    markers.set(e.id, {
-                        ...e,
-                        startLng: e.lng, startLat: e.lat,
-                        currentLng: e.lng, currentLat: e.lat,
-                        targetLng: e.lng, targetLat: e.lat,
-                        startTime: now
-                    });
-                });
-            }
-            if (delta.updated) {
-                delta.updated.forEach(e => {
-                    const old = markers.get(e.id);
-                    markers.set(e.id, {
-                        ...e,
-                        startLng: old ? old.currentLng : e.lng,
-                        startLat: old ? old.currentLat : e.lat,
-                        currentLng: old ? old.currentLng : e.lng,
-                        currentLat: old ? old.currentLat : e.lat,
-                        targetLng: e.lng,
-                        targetLat: e.lat,
-                        startTime: now
-                    });
-                });
-            }
+            console.log("Delta received:", { added: delta.added?.length, updated: delta.updated?.length, removed: delta.removed?.length });
+
+            // Sync standard cache for local sidebar details panel queries
+            if (delta.added) delta.added.forEach(e => markers.set(e.id, e));
+            if (delta.updated) delta.updated.forEach(e => markers.set(e.id, e));
             if (delta.removed) delta.removed.forEach(id => markers.delete(id));
-            document.getElementById('status').innerText = markers.size + " TARGETS TRACKING (60 FPS)";
+
+            // Pipe updates directly into Rust's linear allocator memory heap
+            if (radarEngine) {
+                radarEngine.update_targets(delta.added || [], delta.updated || [], delta.removed || [], now);
+            }
         }
 
         function connect() {
