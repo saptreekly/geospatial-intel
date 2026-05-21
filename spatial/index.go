@@ -33,7 +33,7 @@ var targetResolutions = []int{2, 3, 4, 6, 7}
 var (
 	visiblePool           = sync.Pool{New: func() interface{} { return make([]entity.Entity, 0, 1024) }}
 	clusterCountsPool     = sync.Pool{New: func() interface{} { return make(map[h3.Cell]int, 1024) }}
-	processedEntitiesPool = sync.Pool{New: func() interface{} { return make(map[string]struct{}, 1024) }}
+	processedEntitiesPool = sync.Pool{New: func() interface{} { return make(map[uint32]struct{}, 4096) }}
 	viewportCellSetPool   = sync.Pool{New: func() interface{} { return make(map[h3.Cell]struct{}, 1024) }}
 )
 
@@ -276,7 +276,7 @@ func (idx *Index) Query(vp entity.Viewport, outVisible []entity.Entity, outClust
 	// Get from pools
 	visible := visiblePool.Get().([]entity.Entity)
 	clusterCounts := clusterCountsPool.Get().(map[h3.Cell]int)
-	processedEntities := processedEntitiesPool.Get().(map[string]struct{})
+	processedEntities := processedEntitiesPool.Get().(map[uint32]struct{})
 	viewportCellSet := viewportCellSetPool.Get().(map[h3.Cell]struct{})
 
 	// Defer cleanup and put back
@@ -320,18 +320,18 @@ func (idx *Index) Query(vp entity.Viewport, outVisible []entity.Entity, outClust
 		for populatedCell, ids := range layer {
 			for i := 0; i < len(ids); i++ {
 				internalID := ids[i]
-				stringID := idx.idToEntityID[internalID]
-				if _, alreadyProcessed := processedEntities[stringID]; alreadyProcessed {
+				if _, alreadyProcessed := processedEntities[internalID]; alreadyProcessed {
 					continue
 				}
 
 				if !onlyClusters {
+					stringID := idx.idToEntityID[internalID]
 					if e, ok := idx.entities[stringID]; ok {
 						visible = append(visible, e)
 					}
 				}
 				totalEntitiesInViewport++
-				processedEntities[stringID] = struct{}{}
+				processedEntities[internalID] = struct{}{}
 			}
 			if onlyClusters {
 				clusterCounts[populatedCell] = idx.globalCellCounts[queryResolution][populatedCell]
@@ -343,18 +343,18 @@ func (idx *Index) Query(vp entity.Viewport, outVisible []entity.Entity, outClust
 			if ids, found := layer[viewCell]; found {
 				for i := 0; i < len(ids); i++ {
 					internalID := ids[i]
-					stringID := idx.idToEntityID[internalID]
-					if _, alreadyProcessed := processedEntities[stringID]; alreadyProcessed {
+					if _, alreadyProcessed := processedEntities[internalID]; alreadyProcessed {
 						continue
 					}
 
 					if !onlyClusters {
+						stringID := idx.idToEntityID[internalID]
 						if e, ok := idx.entities[stringID]; ok {
 							visible = append(visible, e)
 						}
 					}
 					totalEntitiesInViewport++
-					processedEntities[stringID] = struct{}{}
+					processedEntities[internalID] = struct{}{}
 				}
 			}
 
@@ -368,18 +368,18 @@ func (idx *Index) Query(vp entity.Viewport, outVisible []entity.Entity, outClust
 			if _, inView := viewportCellSet[populatedCell]; inView {
 				for i := 0; i < len(ids); i++ {
 					internalID := ids[i]
-					stringID := idx.idToEntityID[internalID]
-					if _, alreadyProcessed := processedEntities[stringID]; alreadyProcessed {
+					if _, alreadyProcessed := processedEntities[internalID]; alreadyProcessed {
 						continue
 					}
 
 					if !onlyClusters {
+						stringID := idx.idToEntityID[internalID]
 						if e, ok := idx.entities[stringID]; ok {
 							visible = append(visible, e)
 						}
 					}
 					totalEntitiesInViewport++
-					processedEntities[stringID] = struct{}{}
+					processedEntities[internalID] = struct{}{}
 				}
 			}
 			if onlyClusters {

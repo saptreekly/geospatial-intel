@@ -51,13 +51,21 @@ func TestTraceHighLoadSimulation(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			vp := entity.Viewport{North: 90, South: -90, East: 180, West: -180, Zoom: 7}
+
+			// Allocate buffers exactly once per worker thread thread boundary
+			visible := make([]entity.Entity, 0, 1000)
+			clusters := make(map[string]entity.Cluster)
+
 			for {
 				select {
 				case <-stopChan:
 					return
 				default:
-					visible := make([]entity.Entity, 0, 100)
-					clusters := make(map[string]entity.Cluster)
+					// Clear buffers cleanly without heap overhead
+					visible = visible[:0]
+					for k := range clusters {
+						delete(clusters, k)
+					}
 					_, _ = idx.Query(vp, visible, clusters)
 				}
 			}
