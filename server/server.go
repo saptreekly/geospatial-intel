@@ -128,14 +128,32 @@ var indexHTML = `<!DOCTYPE html>
         }
 
         function sendViewport() {
-            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            if (!ws || ws.readyState !== WebSocket.OPEN || !map) return;
             const bounds = map.getBounds();
+
+            // Clamp boundaries to strict physical global maximums
+            const north = Math.min(89.9, bounds.getNorth());
+            const south = Math.max(-89.9, bounds.getSouth());
+
+            let east = bounds.getEast();
+            let west = bounds.getWest();
+
+            // Handle MapLibre map wrapping/infinite panning extensions
+            if (east - west >= 360) {
+                east = 180;
+                west = -180;
+            } else {
+                // Normalize longitudes to stay within [-180, 180]
+                east = ((east + 180) % 360 + 360) % 360 - 180;
+                west = ((west + 180) % 360 + 360) % 360 - 180;
+            }
+
             ws.send(JSON.stringify({
                 type: 'viewport',
-                north: bounds.getNorth(),
-                south: bounds.getSouth(),
-                east: bounds.getEast(),
-                west: bounds.getWest(),
+                north: north,
+                south: south,
+                east: east,
+                west: west,
                 zoom: Math.round(map.getZoom())
             }));
         }
