@@ -73,7 +73,7 @@ func (s *Server) Start() error {
 var indexHTML = `<!DOCTYPE html>
 <html>
 <head>
-    <title>OSINT Aviation Tracker</title>
+    <title>Tactical OSINT Hub</title>
     <!-- MapLibre GL JS -->
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
@@ -81,127 +81,106 @@ var indexHTML = `<!DOCTYPE html>
     <script src="https://unpkg.com/@deck.gl/core@8.9.0/dist.min.js"></script>
     <script src="https://unpkg.com/@deck.gl/layers@8.9.0/dist.min.js"></script>
     <style>
-        body { margin: 0; padding: 0; overflow: hidden; background: #111; font-family: sans-serif; }
+        body { margin: 0; padding: 0; overflow: hidden; background: #111; font-family: 'Courier New', monospace; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; }
         #status {
             position: absolute; bottom: 20px; left: 20px; z-index: 10;
-            background: rgba(0, 0, 0, 0.7); color: white;
-            padding: 12px 16px; border-radius: 8px; font-size: 14px;
-            backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.1);
+            background: rgba(0, 20, 0, 0.85); color: #00ff78;
+            padding: 12px 16px; border-radius: 4px; font-size: 13px;
+            backdrop-filter: blur(4px); border: 1px solid rgba(0,255,120,0.3);
+            box-shadow: 0 0 15px rgba(0,255,120,0.1);
         }
     </style>
 </head>
 <body>
-    <div id="status">Initializing high-performance engine...</div>
+    <div id="status">INITIATING TACTICAL UPLINK...</div>
     <div id="map"></div>
     <script>
         const markers = new Map();
-        let deckgl;
+        let map;
+        let deckOverlay;
         let ws;
 
-        // Plane icon SVG path
-        const PLANE_ICON = "M21,16V14L13,9V3.5A1.5,1.5 0 0,0 11.5,2A1.5,1.5 0 0,0 10,3.5V9L2,14V16L10,13.5V19L8,20.5V22L11.5,21L15,22V20.5L13,19V13.5L21,16Z";
-        const ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="' + PLANE_ICON + '" fill="white"/></svg>';
-        const ICON_DATA_URL = 'data:image/svg+xml;base64,' + btoa(ICON_SVG);
-
         function init() {
-            deckgl = new deck.Deck({
+            // 1. Initialize MapLibre GL first
+            map = new maplibregl.Map({
                 container: 'map',
-                mapStyle: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
-                initialViewState: {
-                    longitude: 0,
-                    latitude: 20,
-                    zoom: 3,
-                    pitch: 0,
-                    bearing: 0
-                },
-                controller: true,
-                onViewStateChange: ({viewState}) => {
-                    deckgl.setProps({viewState});
-                    sendViewport();
-                },
+                style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+                center: [0, 20],
+                zoom: 3,
+                interactive: true
+            });
+
+            // 2. Create the Deck.gl Overlay
+            deckOverlay = new deck.MapboxOverlay({
+                interleaved: false,
                 layers: []
             });
+
+            // 3. Add Deck as a control to MapLibre
+            map.addControl(deckOverlay);
+
+            // 4. Bind view state sync
+            map.on('moveend', sendViewport);
+            map.on('zoomend', sendViewport);
+
             connect();
         }
 
-        function connect() {
-            const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(proto + '//' + window.location.host + '/stream');
-            
-            ws.onopen = () => {
-                document.getElementById('status').innerText = 'Connected to OSINT Hub';
-                sendViewport();
-            };
-
-            ws.onmessage = (evt) => {
-                const delta = JSON.parse(evt.data);
-                processDelta(delta);
-            };
-
-            ws.onerror = (err) => {
-                console.error("WebSocket error:", err);
-                document.getElementById('status').innerText = 'Connection error';
-            };
-
-            ws.onclose = () => {
-                document.getElementById('status').innerText = 'Reconnecting...';
-                setTimeout(connect, 2000);
-            };
-        }
-
         function sendViewport() {
-            if (!ws || ws.readyState !== WebSocket.OPEN || !deckgl) return;
-            
-            const vs = deckgl.viewState || deckgl.props.initialViewState;
-            const viewport = new deck.WebMercatorViewport({
-                ...vs,
-                width: deckgl.width || window.innerWidth,
-                height: deckgl.height || window.innerHeight
-            });
-            
-            const nw = viewport.unproject([0, 0]);
-            const se = viewport.unproject([viewport.width, viewport.height]);
-
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            const bounds = map.getBounds();
             ws.send(JSON.stringify({
                 type: 'viewport',
-                north: nw[1],
-                south: se[1],
-                east: se[0],
-                west: nw[0],
-                zoom: vs.zoom
+                north: bounds.getNorth(),
+                south: bounds.getSouth(),
+                east: bounds.getEast(),
+                west: bounds.getWest(),
+                zoom: Math.round(map.getZoom())
             }));
         }
 
         function processDelta(delta) {
-            // Update markers cache
             if (delta.added) delta.added.forEach(e => markers.set(e.id, e));
             if (delta.updated) delta.updated.forEach(e => markers.set(e.id, e));
             if (delta.removed) delta.removed.forEach(id => markers.delete(id));
 
             const aircraftData = Array.from(markers.values());
-            
-            const layer = new deck.IconLayer({
+
+            // 5. Use high-performance Scatterplot returns
+            const layer = new deck.ScatterplotLayer({
                 id: 'aircraft-layer',
                 data: aircraftData,
-                pickable: true,
-                iconAtlas: ICON_DATA_URL,
-                iconMapping: {
-                    airplane: {x: 0, y: 0, width: 24, height: 24, mask: true}
-                },
-                getIcon: d => 'airplane',
                 getPosition: d => [d.lng, d.lat],
-                getAngle: d => -d.heading,
-                getColor: d => [255, 120, 0],
-                getSize: d => 20,
-                sizeScale: 1,
-                transitions: {
-                    getPosition: 600
+                getRadius: d => 15,
+                radiusScale: 1000,
+                radiusMinPixels: 4,
+                radiusMaxPixels: 15,
+                getFillColor: d => [0, 255, 120, 200], // Luminous Tactical Green
+                pickable: true,
+                updateTriggers: {
+                    getPosition: [delta.seq]
                 }
             });
 
-            deckgl.setProps({ layers: [layer] });
-            document.getElementById('status').innerText = aircraftData.length + " aircraft (60 FPS)";
+            deckOverlay.setProps({ layers: [layer] });
+            document.getElementById('status').innerText = aircraftData.length + " TARGETS TRACKING (60 FPS)";
+        }
+
+        function connect() {
+            const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(proto + '//' + window.location.host + '/stream');
+            ws.onopen = () => {
+                document.getElementById('status').innerText = 'CONNECTED TO TACTICAL OSINT HUB';
+                sendViewport();
+            };
+            ws.onmessage = (evt) => {
+                processDelta(JSON.parse(evt.data));
+            };
+            ws.onclose = () => {
+                document.getElementById('status').innerText = 'RECONNECTING...';
+                setTimeout(connect, 2000);
+            };
         }
 
         init();
