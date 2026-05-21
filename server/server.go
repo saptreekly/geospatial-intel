@@ -69,7 +69,7 @@ func (s *Server) Start() error {
 	return s.ListenAndServe()
 }
 
-// indexHTML is the high-performance Deck.gl + Maplibre GL client.
+// indexHTML is the high-performance Maplibre GL client.
 var indexHTML = `<!DOCTYPE html>
 <html>
 <head>
@@ -77,9 +77,6 @@ var indexHTML = `<!DOCTYPE html>
     <!-- MapLibre GL JS -->
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
-    <!-- Deck.gl -->
-    <script src="https://unpkg.com/@deck.gl/core@8.9.0/dist.min.js"></script>
-    <script src="https://unpkg.com/@deck.gl/layers@8.9.0/dist.min.js"></script>
     <style>
         body { margin: 0; padding: 0; overflow: hidden; background: #111; font-family: 'Courier New', monospace; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; }
@@ -90,19 +87,35 @@ var indexHTML = `<!DOCTYPE html>
             backdrop-filter: blur(4px); border: 1px solid rgba(0,255,120,0.3);
             box-shadow: 0 0 15px rgba(0,255,120,0.1);
         }
+        #side-panel {
+            position: absolute; top: 0; right: -320px; width: 300px; bottom: 0; z-index: 15;
+            background: rgba(0, 15, 5, 0.95); color: #00ff78; padding: 20px;
+            border-left: 1px solid rgba(0, 255, 120, 0.3); box-shadow: -5px 0 25px rgba(0,0,0,0.5);
+            transition: right 0.3s ease; backdrop-filter: blur(6px);
+        }
+        #side-panel.open { right: 0; }
+        .close-btn { float: right; cursor: pointer; font-weight: bold; padding: 0 5px; }
+        .panel-row { margin: 15px 0; border-bottom: 1px solid rgba(0,255,120,0.1); padding-bottom: 5px; }
     </style>
 </head>
 <body>
     <div id="status">INITIATING TACTICAL UPLINK...</div>
     <div id="map"></div>
+    <div id="side-panel">
+        <span class="close-btn" onclick="closePanel()">&times;</span>
+        <h3>TARGET DATA</h3>
+        <div id="panel-content">Select a target for interception telemetry.</div>
+    </div>
     <script>
         const markers = new Map();
         let map;
-        let deckOverlay;
         let ws;
 
+        const PLANE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24"><path d="M21,16V14L13,9V3.5A1.5,1.5 0 0,0 11.5,2A1.5,1.5 0 0,0 10,3.5V9L2,14V16L10,13.5V19L8,20.5V22L11.5,21L15,22V20.5L13,19V13.5L21,16Z" fill="#00ff78" stroke="#111" stroke-width="0.5"/></svg>';
+        const UPDATE_INTERVAL = 25000; // 25 second polling window matching backend seeder
+
         function init() {
-            // 1. Initialize MapLibre GL first
+            // 1. Initialize the native hardware-accelerated map
             map = new maplibregl.Map({
                 container: 'map',
                 style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
@@ -111,78 +124,206 @@ var indexHTML = `<!DOCTYPE html>
                 interactive: true
             });
 
-            // 2. Create the Deck.gl Overlay
-            deckOverlay = new deck.MapboxOverlay({
-                interleaved: false,
-                layers: []
+            // 2. Once WebGL context is ready, inject the data layers
+            map.on('load', () => {
+                // Convert SVG to browser image texture
+                const blob = new Blob([PLANE_SVG], {type: 'image/svg+xml'});
+                const url = URL.createObjectURL(blob);
+                const img = new Image();
+
+                img.onload = () => {
+                    map.addImage('plane-icon', img);
+
+                    map.addSource('aircraft', {
+                        type: 'geojson',
+                        data: { type: 'FeatureCollection', features: [] }
+                    });
+
+                    // Add history source & layer
+                    map.addSource('aircraft-history', {
+                        type: 'geojson',
+                        data: { type: 'FeatureCollection', features: [] }
+                    });
+                    map.addLayer({
+                        id: 'history-layer',
+                        type: 'line',
+                        source: 'aircraft-history',
+                        layout: { 'line-join': 'round', 'line-cap': 'round' },
+                        paint: { 'line-color': '#00ff78', 'line-width': 2, 'line-dasharray': [2, 2] }
+                    });
+
+                    map.addLayer({
+                        id: 'aircraft-layer',
+                        type: 'symbol',
+                        source: 'aircraft',
+                        layout: {
+                            'icon-image': 'plane-icon',
+                            'icon-size': 0.8,
+                            'icon-rotate': ['get', 'heading'],
+                            'icon-rotation-alignment': 'map',
+                            'icon-allow-overlap': true,
+                            'icon-ignore-placement': true
+                        }
+                    });
+
+                    // Interaction Handlers
+                    map.on('click', 'aircraft-layer', (e) => {
+                        const f = e.features[0];
+                        if (f) showTargetTelemetry(f.properties.id);
+                    });
+                    map.on('mouseenter', 'aircraft-layer', () => map.getCanvas().style.cursor = 'pointer');
+                    map.on('mouseleave', 'aircraft-layer', () => map.getCanvas().style.cursor = '');
+
+                    connect();
+                    animatePlanes();
+                };
+                img.src = url;
             });
 
-            // 3. Add Deck as a control to MapLibre
-            map.addControl(deckOverlay);
-
-            // 4. Bind view state sync
             map.on('moveend', sendViewport);
             map.on('zoomend', sendViewport);
+        }
 
-            connect();
+        function animatePlanes() {
+            if (!map || !map.getSource('aircraft')) {
+                requestAnimationFrame(animatePlanes);
+                return;
+            }
+
+            const now = performance.now();
+            const aircraftData = Array.from(markers.values());
+
+            aircraftData.forEach(d => {
+                const elapsed = now - d.startTime;
+                const t = Math.min(1, elapsed / UPDATE_INTERVAL);
+
+                // Smoothly ease position coordinates over the timeline matrix
+                d.currentLng = d.startLng + (d.targetLng - d.startLng) * t;
+                d.currentLat = d.startLat + (d.targetLat - d.startLat) * t;
+            });
+
+            const geojson = {
+                type: 'FeatureCollection',
+                features: aircraftData.map(d => ({
+                    type: 'Feature',
+                    geometry: { type: 'Point', coordinates: [d.currentLng, d.currentLat] },
+                    properties: { id: d.id, heading: d.heading || 0 }
+                }))
+            };
+
+            map.getSource('aircraft').setData(geojson);
+            requestAnimationFrame(animatePlanes);
+        }
+
+        function showTargetTelemetry(id) {
+            const p = markers.get(id);
+            if (!p) return;
+
+            // 1. Instantly populate side panel metadata from active memory cache
+            document.getElementById('side-panel').classList.add('open');
+            document.getElementById('panel-content').innerHTML = 
+                '<div class="panel-row"><b>ICAO24:</b> ' + p.id + '</div>' +
+                '<div class="panel-row"><b>CALLSIGN:</b> ' + (p.callSign || 'UNKNOWN') + '</div>' +
+                '<div class="panel-row"><b>SOURCE:</b> ' + p.source.toUpperCase() + '</div>' +
+                '<div class="panel-row"><b>SPEED:</b> ' + Math.round(p.speed) + ' kn</div>' +
+                '<div class="panel-row"><b>ALTITUDE:</b> ' + Math.round(p.altitude) + ' ft</div>' +
+                '<div class="panel-row"><b>HEADING:</b> ' + Math.round(p.heading) + '°</div>' +
+                '<div class="panel-row"><b>LAT/LNG:</b> ' + p.lat.toFixed(4) + ', ' + p.lng.toFixed(4) + '</div>';
+
+            // 2. Query Go server history API to dynamically map historical data path vectors
+            fetch('/api/history?id=' + encodeURIComponent(id))
+                .then(res => res.json())
+                .then(historyData => {
+                    if (!historyData || historyData.length < 2) return;
+
+                    // Sort ascending (oldest logs first)
+                    const sortedHistory = [...historyData].sort((a, b) => a.updatedAt - b.updatedAt);
+                    const features = [];
+                    let currentSegment = [];
+
+                    for (let i = 0; i < sortedHistory.length; i++) {
+                        if (i > 0 && (sortedHistory[i].updatedAt - sortedHistory[i-1].updatedAt) > 900) {
+                            if (currentSegment.length >= 2) {
+                                features.push({
+                                    type: 'Feature',
+                                    geometry: { type: 'LineString', coordinates: currentSegment }
+                                });
+                            }
+                            currentSegment = [];
+                        }
+                        currentSegment.push([sortedHistory[i].lng, sortedHistory[i].lat]);
+                    }
+                    if (currentSegment.length >= 2) {
+                        features.push({
+                            type: 'Feature',
+                            geometry: { type: 'LineString', coordinates: currentSegment }
+                        });
+                    }
+
+                    map.getSource('aircraft-history').setData({
+                        type: 'FeatureCollection',
+                        features: features
+                    });
+                })
+                .catch(err => console.error("Error loading trail telemetry:", err));
+        }
+
+        function closePanel() {
+            document.getElementById('side-panel').classList.remove('open');
+            map.getSource('aircraft-history').setData({ type: 'FeatureCollection', features: [] });
         }
 
         function sendViewport() {
-            if (!ws || ws.readyState !== WebSocket.OPEN || !map) return;
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
             const bounds = map.getBounds();
-
-            // Clamp boundaries to strict physical global maximums
             const north = Math.min(89.9, bounds.getNorth());
             const south = Math.max(-89.9, bounds.getSouth());
-
             let east = bounds.getEast();
             let west = bounds.getWest();
 
-            // Handle MapLibre map wrapping/infinite panning extensions
-            if (east - west >= 360) {
-                east = 180;
-                west = -180;
-            } else {
-                // Normalize longitudes to stay within [-180, 180]
+            if (east - west >= 360) { east = 180; west = -180; }
+            else {
                 east = ((east + 180) % 360 + 360) % 360 - 180;
                 west = ((west + 180) % 360 + 360) % 360 - 180;
             }
 
             ws.send(JSON.stringify({
                 type: 'viewport',
-                north: north,
-                south: south,
-                east: east,
-                west: west,
+                north: north, south: south, east: east, west: west,
                 zoom: Math.round(map.getZoom())
             }));
         }
 
         function processDelta(delta) {
-            if (delta.added) delta.added.forEach(e => markers.set(e.id, e));
-            if (delta.updated) delta.updated.forEach(e => markers.set(e.id, e));
+            const now = performance.now();
+            if (delta.added) {
+                delta.added.forEach(e => {
+                    markers.set(e.id, {
+                        ...e,
+                        startLng: e.lng, startLat: e.lat,
+                        currentLng: e.lng, currentLat: e.lat,
+                        targetLng: e.lng, targetLat: e.lat,
+                        startTime: now
+                    });
+                });
+            }
+            if (delta.updated) {
+                delta.updated.forEach(e => {
+                    const old = markers.get(e.id);
+                    markers.set(e.id, {
+                        ...e,
+                        startLng: old ? old.currentLng : e.lng,
+                        startLat: old ? old.currentLat : e.lat,
+                        currentLng: old ? old.currentLng : e.lng,
+                        currentLat: old ? old.currentLat : e.lat,
+                        targetLng: e.lng,
+                        targetLat: e.lat,
+                        startTime: now
+                    });
+                });
+            }
             if (delta.removed) delta.removed.forEach(id => markers.delete(id));
-
-            const aircraftData = Array.from(markers.values());
-
-            // 5. Use high-performance Scatterplot returns
-            const layer = new deck.ScatterplotLayer({
-                id: 'aircraft-layer',
-                data: aircraftData,
-                getPosition: d => [d.lng, d.lat],
-                getRadius: d => 15,
-                radiusScale: 1000,
-                radiusMinPixels: 4,
-                radiusMaxPixels: 15,
-                getFillColor: d => [0, 255, 120, 200], // Luminous Tactical Green
-                pickable: true,
-                updateTriggers: {
-                    getPosition: [delta.seq]
-                }
-            });
-
-            deckOverlay.setProps({ layers: [layer] });
-            document.getElementById('status').innerText = aircraftData.length + " TARGETS TRACKING (60 FPS)";
+            document.getElementById('status').innerText = markers.size + " TARGETS TRACKING (60 FPS)";
         }
 
         function connect() {
@@ -192,9 +333,7 @@ var indexHTML = `<!DOCTYPE html>
                 document.getElementById('status').innerText = 'CONNECTED TO TACTICAL OSINT HUB';
                 sendViewport();
             };
-            ws.onmessage = (evt) => {
-                processDelta(JSON.parse(evt.data));
-            };
+            ws.onmessage = (evt) => { processDelta(JSON.parse(evt.data)); };
             ws.onclose = () => {
                 document.getElementById('status').innerText = 'RECONNECTING...';
                 setTimeout(connect, 2000);
