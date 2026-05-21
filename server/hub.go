@@ -1,9 +1,9 @@
 package server
 
 import (
-	"encoding/json"
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -60,6 +60,12 @@ var deltaPool = sync.Pool{
 			Removed:  make([]string, 0, 100),
 			Clusters: make(map[string]entity.Cluster),
 		}
+	},
+}
+
+var stringsBuilderPool = sync.Pool{
+	New: func() any {
+		return &strings.Builder{}
 	},
 }
 
@@ -225,13 +231,14 @@ func (h *Hub) computeAndSend(c *Client, event store.StoreEvent, visible []entity
 		return false, 0
 	}
 
-	deltaBytes, err := json.Marshal(delta)
+	sb := stringsBuilderPool.Get().(*strings.Builder)
+	sb.Reset()
+	delta.MarshalFast(sb)
+	deltaBytes := []byte(sb.String())
+	stringsBuilderPool.Put(sb)
+
 	payloadSize := len(delta.Added) + len(delta.Updated) + len(delta.Removed) + len(delta.Clusters)
 	deltaPool.Put(delta)
-
-	if err != nil {
-		return false, 0
-	}
 
 	// Send delta
 	select {
@@ -304,12 +311,14 @@ func (h *Hub) HandleViewportUpdate(c *Client, vp entity.Viewport) {
 		return
 	}
 
-	deltaBytes, err := json.Marshal(delta)
+	sb := stringsBuilderPool.Get().(*strings.Builder)
+	sb.Reset()
+	delta.MarshalFast(sb)
+	deltaBytes := []byte(sb.String())
+	stringsBuilderPool.Put(sb)
+
 	deltaPool.Put(delta)
 	queryBufferPool.Put(buf)
-	if err != nil {
-		return
-	}
 
 	select {
 	case c.ch <- deltaBytes:

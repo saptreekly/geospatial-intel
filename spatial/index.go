@@ -20,6 +20,7 @@ import "C"
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -30,6 +31,13 @@ import (
 
 var targetResolutions = []int{2, 3, 4, 6, 7}
 
+type indexSnapshot struct {
+	entities          map[uint32]entity.Entity
+	layers            map[int]map[h3.Cell][]uint32
+	globalCellCounts  map[int]map[h3.Cell]int
+	totalGlobalCounts map[int]int
+}
+
 var (
 	visiblePool           = sync.Pool{New: func() interface{} { return make([]entity.Entity, 0, 1024) }}
 	clusterCountsPool     = sync.Pool{New: func() interface{} { return make(map[h3.Cell]int, 1024) }}
@@ -38,12 +46,8 @@ var (
 )
 
 type Index struct {
-	mu                sync.RWMutex
-	entities          map[string]entity.Entity
-	layers            map[int]map[h3.Cell][]uint32
-	globalCellCounts  map[int]map[h3.Cell]int
-	totalGlobalCounts map[int]int
-
+	snapshot             atomic.Pointer[indexSnapshot]
+	mu                   sync.Mutex // Used strictly to serialize concurrent writers, NOT readers
 	idCounter            uint32
 	entityIDToInternalID map[string]uint32
 	idToEntityID         map[uint32]string
@@ -67,12 +71,9 @@ func NewIndex() *Index {
 		globalCellCounts[res] = make(map[h3.Cell]int)
 		totalGlobalCounts[res] = 0
 	}
-	return &Index{
-		entities:          make(map[string]entity.Entity),
-		layers:            layers,
-		globalCellCounts:  globalCellCounts,
-		totalGlobalCounts: totalGlobalCounts,
-
+	
+	idx := &Index{
+		idCounter:            0,
 		entityIDToInternalID: make(map[string]uint32),
 		idToEntityID:         make(map[uint32]string),
 		entityCells:          make(map[uint32][5]h3.Cell),
@@ -85,6 +86,15 @@ func NewIndex() *Index {
 		r6Buf:   make([]uint64, 0),
 		r7Buf:   make([]uint64, 0),
 	}
+	
+	idx.snapshot.Store(&indexSnapshot{
+		entities:          make(map[uint32]entity.Entity),
+		layers:            layers,
+		globalCellCounts:  globalCellCounts,
+		totalGlobalCounts: totalGlobalCounts,
+	})
+	
+	return idx
 }
 
 type precomputedRemoval struct {
@@ -111,13 +121,35 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	count := len(entities)
-	if len(idx.entities) == 0 && count > 0 {
-		// Pre-size map bucket tables to completely eliminate bucket splitting and rehashing churn
-		idx.entities = make(map[string]entity.Entity, count)
-		idx.entityIDToInternalID = make(map[string]uint32, count)
-		idx.entityCells = make(map[uint32][5]h3.Cell, count)
+	oldSnap := idx.snapshot.Load()
+	newSnap := &indexSnapshot{
+		entities:          make(map[uint32]entity.Entity, len(oldSnap.entities)),
+		layers:            make(map[int]map[h3.Cell][]uint32),
+		globalCellCounts:  make(map[int]map[h3.Cell]int),
+		totalGlobalCounts: make(map[int]int),
 	}
+	for k, v := range oldSnap.entities {
+		newSnap.entities[k] = v
+	}
+	for res, cells := range oldSnap.layers {
+		newSnap.layers[res] = make(map[h3.Cell][]uint32, len(cells))
+		for cell, ids := range cells {
+			newIds := make([]uint32, len(ids))
+			copy(newIds, ids)
+			newSnap.layers[res][cell] = newIds
+		}
+	}
+	for res, cells := range oldSnap.globalCellCounts {
+		newSnap.globalCellCounts[res] = make(map[h3.Cell]int, len(cells))
+		for cell, count := range cells {
+			newSnap.globalCellCounts[res][cell] = count
+		}
+	}
+	for res, count := range oldSnap.totalGlobalCounts {
+		newSnap.totalGlobalCounts[res] = count
+	}
+
+	count := len(entities)
 
 	// STEP 1: PRE-COMPUTE REMOVALS
 	var removalJobs []precomputedRemoval
@@ -171,7 +203,7 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 
 	// Exec Deletions
 	for _, job := range removalJobs {
-		ids := idx.layers[job.res][job.cell]
+		ids := newSnap.layers[job.res][job.cell]
 		for _, id := range removed {
 			internalID, ok := idx.entityIDToInternalID[id]
 			if !ok {
@@ -183,12 +215,12 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 					ids[i] = ids[lastIdx]
 					ids = ids[:lastIdx]
 					if len(ids) == 0 {
-						delete(idx.layers[job.res], job.cell)
+						delete(newSnap.layers[job.res], job.cell)
 					} else {
-						idx.layers[job.res][job.cell] = ids
+						newSnap.layers[job.res][job.cell] = ids
 					}
-					idx.globalCellCounts[job.res][job.cell]--
-					idx.totalGlobalCounts[job.res]--
+					newSnap.globalCellCounts[job.res][job.cell]--
+					newSnap.totalGlobalCounts[job.res]--
 					break
 				}
 			}
@@ -197,16 +229,16 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	for _, id := range removed {
 		if internalID, ok := idx.entityIDToInternalID[id]; ok {
 			delete(idx.entityCells, internalID)
+			delete(newSnap.entities, internalID)
 		}
-		delete(idx.entities, id)
 		delete(idx.entityIDToInternalID, id)
 	}
 
 	// Exec Insertions / Updates
 	for i, e := range entities {
-		_, exists := idx.entities[e.ID]
-		newCells := [5]h3.Cell{h3.Cell(idx.r2Buf[i]), h3.Cell(idx.r3Buf[i]), h3.Cell(idx.r4Buf[i]), h3.Cell(idx.r6Buf[i]), h3.Cell(idx.r7Buf[i])}
 		internalID := idx.getInternalID(e.ID)
+		_, exists := newSnap.entities[internalID]
+		newCells := [5]h3.Cell{h3.Cell(idx.r2Buf[i]), h3.Cell(idx.r3Buf[i]), h3.Cell(idx.r4Buf[i]), h3.Cell(idx.r6Buf[i]), h3.Cell(idx.r7Buf[i])}
 
 		if exists {
 			oldCells := idx.entityCells[internalID]
@@ -219,29 +251,29 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 
 				if oldCell != newCell {
 					// Remove from old cell
-					ids := idx.layers[res][oldCell]
+					ids := newSnap.layers[res][oldCell]
 					for k, id := range ids {
 						if id == internalID {
 							lastIdx := len(ids) - 1
 							ids[k] = ids[lastIdx]
 							ids = ids[:lastIdx]
 							if len(ids) == 0 {
-								delete(idx.layers[res], oldCell)
+								delete(newSnap.layers[res], oldCell)
 							} else {
-								idx.layers[res][oldCell] = ids
+								newSnap.layers[res][oldCell] = ids
 							}
-							idx.globalCellCounts[res][oldCell]--
-							idx.totalGlobalCounts[res]--
+							newSnap.globalCellCounts[res][oldCell]--
+							newSnap.totalGlobalCounts[res]--
 							break
 						}
 					}
 					// Add to new cell
-					if len(idx.layers[res][newCell]) == 0 {
-						idx.layers[res][newCell] = make([]uint32, 0, 8)
+					if len(newSnap.layers[res][newCell]) == 0 {
+						newSnap.layers[res][newCell] = make([]uint32, 0, 8)
 					}
-					idx.layers[res][newCell] = append(idx.layers[res][newCell], internalID)
-					idx.globalCellCounts[res][newCell]++
-					idx.totalGlobalCounts[res]++
+					newSnap.layers[res][newCell] = append(newSnap.layers[res][newCell], internalID)
+					newSnap.globalCellCounts[res][newCell]++
+					newSnap.totalGlobalCounts[res]++
 				}
 			}
 		} else {
@@ -251,17 +283,19 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 				if cell == 0 {
 					continue
 				}
-				if len(idx.layers[res][cell]) == 0 {
-					idx.layers[res][cell] = make([]uint32, 0, 8)
+				if len(newSnap.layers[res][cell]) == 0 {
+					newSnap.layers[res][cell] = make([]uint32, 0, 8)
 				}
-				idx.layers[res][cell] = append(idx.layers[res][cell], internalID)
-				idx.globalCellCounts[res][cell]++
-				idx.totalGlobalCounts[res]++
+				newSnap.layers[res][cell] = append(newSnap.layers[res][cell], internalID)
+				newSnap.globalCellCounts[res][cell]++
+				newSnap.totalGlobalCounts[res]++
 			}
 		}
 		idx.entityCells[internalID] = newCells
-		idx.entities[e.ID] = e
+		newSnap.entities[internalID] = e
 	}
+	
+	idx.snapshot.Store(newSnap)
 }
 
 func (idx *Index) Query(vp entity.Viewport, outVisible []entity.Entity, outClusters map[string]entity.Cluster) ([]entity.Entity, error) {
@@ -270,8 +304,8 @@ func (idx *Index) Query(vp entity.Viewport, outVisible []entity.Entity, outClust
 
 	queryResolution := ZoomToResolution(vp.Zoom)
 
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
+	// Atomically load the current snapshot for lock-free reading
+	snap := idx.snapshot.Load()
 
 	// Get from pools
 	visible := visiblePool.Get().([]entity.Entity)
@@ -312,7 +346,7 @@ func (idx *Index) Query(vp entity.Viewport, outVisible []entity.Entity, outClust
 		}
 	}
 
-	layer := idx.layers[queryResolution]
+	layer := snap.layers[queryResolution]
 	totalEntitiesInViewport := 0
 
 	if vp.IsGlobal() {
@@ -325,8 +359,7 @@ func (idx *Index) Query(vp entity.Viewport, outVisible []entity.Entity, outClust
 				}
 
 				if !onlyClusters {
-					stringID := idx.idToEntityID[internalID]
-					if e, ok := idx.entities[stringID]; ok {
+					if e, ok := snap.entities[internalID]; ok {
 						visible = append(visible, e)
 					}
 				}
@@ -334,7 +367,7 @@ func (idx *Index) Query(vp entity.Viewport, outVisible []entity.Entity, outClust
 				processedEntities[internalID] = struct{}{}
 			}
 			if onlyClusters {
-				clusterCounts[populatedCell] = idx.globalCellCounts[queryResolution][populatedCell]
+				clusterCounts[populatedCell] = snap.globalCellCounts[queryResolution][populatedCell]
 			}
 		}
 	} else if len(viewportCellSet) < len(layer) {
@@ -348,8 +381,7 @@ func (idx *Index) Query(vp entity.Viewport, outVisible []entity.Entity, outClust
 					}
 
 					if !onlyClusters {
-						stringID := idx.idToEntityID[internalID]
-						if e, ok := idx.entities[stringID]; ok {
+						if e, ok := snap.entities[internalID]; ok {
 							visible = append(visible, e)
 						}
 					}
@@ -359,7 +391,7 @@ func (idx *Index) Query(vp entity.Viewport, outVisible []entity.Entity, outClust
 			}
 
 			if onlyClusters {
-				clusterCounts[viewCell] = idx.globalCellCounts[queryResolution][viewCell]
+				clusterCounts[viewCell] = snap.globalCellCounts[queryResolution][viewCell]
 			}
 		}
 	} else {
@@ -373,8 +405,7 @@ func (idx *Index) Query(vp entity.Viewport, outVisible []entity.Entity, outClust
 					}
 
 					if !onlyClusters {
-						stringID := idx.idToEntityID[internalID]
-						if e, ok := idx.entities[stringID]; ok {
+						if e, ok := snap.entities[internalID]; ok {
 							visible = append(visible, e)
 						}
 					}
@@ -383,13 +414,13 @@ func (idx *Index) Query(vp entity.Viewport, outVisible []entity.Entity, outClust
 				}
 			}
 			if onlyClusters {
-				clusterCounts[populatedCell] = idx.globalCellCounts[queryResolution][populatedCell]
+				clusterCounts[populatedCell] = snap.globalCellCounts[queryResolution][populatedCell]
 			}
 		}
 	}
 
 	if !onlyClusters {
-		outOfViewCount := idx.totalGlobalCounts[queryResolution] - totalEntitiesInViewport
+		outOfViewCount := snap.totalGlobalCounts[queryResolution] - totalEntitiesInViewport
 		if outOfViewCount > 0 {
 			outClusters["out_of_view"] = entity.Cluster{Count: outOfViewCount}
 		}

@@ -22,10 +22,11 @@ func TestNewIndex(t *testing.T) {
 	if idx == nil {
 		t.Fatal("NewIndex returned nil")
 	}
-	if idx.entities == nil {
+	snap := idx.snapshot.Load()
+	if snap.entities == nil {
 		t.Error("NewIndex did not initialize entities map")
 	}
-	if idx.layers == nil {
+	if snap.layers == nil {
 		t.Error("NewIndex did not initialize layers map")
 	}
 }
@@ -36,26 +37,30 @@ func TestUpdate_Add(t *testing.T) {
 	e1 := createTestEntity("e1", 0.0, 0.0)
 	e2 := createTestEntity("e2", 1.0, 1.0)
 	idx.BatchUpdateRust([]entity.Entity{e1, e2}, nil)
+	
+	snap := idx.snapshot.Load()
 
-	if len(idx.entities) != 2 {
-		t.Errorf("Expected 2 entities, got %d", len(idx.entities))
+	if len(snap.entities) != 2 {
+		t.Errorf("Expected 2 entities, got %d", len(snap.entities))
 	}
-	if _, ok := idx.entities[e1.ID]; !ok {
+	internalID1 := idx.entityIDToInternalID[e1.ID]
+	if _, ok := snap.entities[internalID1]; !ok {
 		t.Errorf("Entity %s not found in entities map", e1.ID)
 	}
-	if _, ok := idx.entities[e2.ID]; !ok {
+	internalID2 := idx.entityIDToInternalID[e2.ID]
+	if _, ok := snap.entities[internalID2]; !ok {
 		t.Errorf("Entity %s not found in entities map", e2.ID)
 	}
 
 	h3e1, _ := h3.LatLngToCell(h3.LatLng{Lat: e1.Lat, Lng: e1.Lng}, indexingResolution)
 	h3e2, _ := h3.LatLngToCell(h3.LatLng{Lat: e2.Lat, Lng: e2.Lng}, indexingResolution)
 
-	if len(idx.layers[indexingResolution][h3e1]) != 1 {
-		t.Errorf("Expected 1 entity in h3e1 cell, got %d", len(idx.layers[indexingResolution][h3e1]))
+	if len(snap.layers[indexingResolution][h3e1]) != 1 {
+		t.Errorf("Expected 1 entity in h3e1 cell, got %d", len(snap.layers[indexingResolution][h3e1]))
 	}
 	
 	foundE1 := false
-	for _, internalID := range idx.layers[indexingResolution][h3e1] {
+	for _, internalID := range snap.layers[indexingResolution][h3e1] {
 		if idx.idToEntityID[internalID] == e1.ID {
 			foundE1 = true
 			break
@@ -65,11 +70,11 @@ func TestUpdate_Add(t *testing.T) {
 		t.Errorf("Entity %s not found in layers[7] for h3e1", e1.ID)
 	}
 	
-	if len(idx.layers[indexingResolution][h3e2]) != 1 {
-		t.Errorf("Expected 1 entity in h3e2 cell, got %d", len(idx.layers[indexingResolution][h3e2]))
+	if len(snap.layers[indexingResolution][h3e2]) != 1 {
+		t.Errorf("Expected 1 entity in h3e2 cell, got %d", len(snap.layers[indexingResolution][h3e2]))
 	}
 	foundE2 := false
-	for _, internalID := range idx.layers[indexingResolution][h3e2] {
+	for _, internalID := range snap.layers[indexingResolution][h3e2] {
 		if idx.idToEntityID[internalID] == e2.ID {
 			foundE2 = true
 			break
@@ -89,12 +94,15 @@ func TestUpdate_Update(t *testing.T) {
 	// Update e1's position
 	e1Updated := createTestEntity("e1", 0.01, 0.01)
 	idx.BatchUpdateRust([]entity.Entity{e1Updated}, nil)
+	
+	snap := idx.snapshot.Load()
 
-	if len(idx.entities) != 1 {
-		t.Errorf("Expected 1 entity after update, got %d", len(idx.entities))
+	if len(snap.entities) != 1 {
+		t.Errorf("Expected 1 entity after update, got %d", len(snap.entities))
 	}
-	if idx.entities[e1.ID].Lat != e1Updated.Lat || idx.entities[e1.ID].Lng != e1Updated.Lng {
-		t.Errorf("Entity e1 not updated in entities map. Expected (%f,%f), got (%f,%f)", e1Updated.Lat, e1Updated.Lng, idx.entities[e1.ID].Lat, idx.entities[e1.ID].Lng)
+	internalID := idx.entityIDToInternalID[e1.ID]
+	if snap.entities[internalID].Lat != e1Updated.Lat || snap.entities[internalID].Lng != e1Updated.Lng {
+		t.Errorf("Entity e1 not updated in entities map. Expected (%f,%f), got (%f,%f)", e1Updated.Lat, e1Updated.Lng, snap.entities[internalID].Lat, snap.entities[internalID].Lng)
 	}
 
 	oldH3e1, _ := h3.LatLngToCell(h3.LatLng{Lat: e1.Lat, Lng: e1.Lng}, indexingResolution)
@@ -102,18 +110,18 @@ func TestUpdate_Update(t *testing.T) {
 
 	// If cell changed, old cell should be empty
 	if oldH3e1 != newH3e1 {
-		if ids, found := idx.layers[indexingResolution][oldH3e1]; found {
+		if ids, found := snap.layers[indexingResolution][oldH3e1]; found {
 			if len(ids) > 0 {
 				t.Errorf("Old H3 cell %d for e1 should be empty", oldH3e1)
 			}
 		}
 	}
 
-	if len(idx.layers[indexingResolution][newH3e1]) != 1 {
-		t.Errorf("Expected 1 entity in new H3 cell %d, got %d", newH3e1, len(idx.layers[indexingResolution][newH3e1]))
+	if len(snap.layers[indexingResolution][newH3e1]) != 1 {
+		t.Errorf("Expected 1 entity in new H3 cell %d, got %d", newH3e1, len(snap.layers[indexingResolution][newH3e1]))
 	}
 	foundUpdated := false
-	for _, internalID := range idx.layers[indexingResolution][newH3e1] {
+	for _, internalID := range snap.layers[indexingResolution][newH3e1] {
 		if idx.idToEntityID[internalID] == e1Updated.ID {
 			foundUpdated = true
 			break
@@ -132,27 +140,27 @@ func TestUpdate_Remove(t *testing.T) {
 	idx.BatchUpdateRust([]entity.Entity{e1, e2}, nil)
 
 	idx.BatchUpdateRust(nil, []string{e1.ID})
+	
+	snap := idx.snapshot.Load()
 
-	if len(idx.entities) != 1 {
-		t.Errorf("Expected 1 entity after removal, got %d", len(idx.entities))
+	if len(snap.entities) != 1 {
+		t.Errorf("Expected 1 entity after removal, got %d", len(snap.entities))
 	}
-	if _, ok := idx.entities[e1.ID]; ok {
-		t.Errorf("Entity %s should have been removed from entities map", e1.ID)
-	}
-	if _, ok := idx.entities[e2.ID]; !ok {
+	internalID2 := idx.entityIDToInternalID[e2.ID]
+	if _, ok := snap.entities[internalID2]; !ok {
 		t.Errorf("Entity %s not found after removal, expected to remain", e2.ID)
 	}
 
 	h3e1, _ := h3.LatLngToCell(h3.LatLng{Lat: e1.Lat, Lng: e1.Lng}, indexingResolution)
-	if ids, found := idx.layers[indexingResolution][h3e1]; found {
+	if ids, found := snap.layers[indexingResolution][h3e1]; found {
 		if len(ids) > 0 {
 			t.Errorf("Old H3 cell %d for e1 should be empty after removal, but found %d entities", h3e1, len(ids))
 		}
 	}
 	
 	h3e2, _ := h3.LatLngToCell(h3.LatLng{Lat: e2.Lat, Lng: e2.Lng}, indexingResolution)
-	if len(idx.layers[indexingResolution][h3e2]) != 1 {
-		t.Errorf("Expected 1 entity in h3e2 cell after removal of e1, got %d", len(idx.layers[indexingResolution][h3e2]))
+	if len(snap.layers[indexingResolution][h3e2]) != 1 {
+		t.Errorf("Expected 1 entity in h3e2 cell after removal of e1, got %d", len(snap.layers[indexingResolution][h3e2]))
 	}
 }
 
@@ -273,16 +281,18 @@ func TestUpdate_NoCellChange(t *testing.T) {
 	e1Updated.Source = "updated_test"
 	idx.BatchUpdateRust([]entity.Entity{e1Updated}, nil)
 
-	if idx.entities[e1.ID].Source != "updated_test" {
+	snap := idx.snapshot.Load()
+	internalID := idx.entityIDToInternalID[e1.ID]
+	if snap.entities[internalID].Source != "updated_test" {
 		t.Errorf("Entity e1 source not updated")
 	}
 
 	h3e1, _ := h3.LatLngToCell(h3.LatLng{Lat: e1.Lat, Lng: e1.Lng}, indexingResolution)
-	if len(idx.layers[indexingResolution][h3e1]) != 1 {
-		t.Errorf("Expected 1 entity in H3 cell %d, got %d", h3e1, len(idx.layers[indexingResolution][h3e1]))
+	if len(snap.layers[indexingResolution][h3e1]) != 1 {
+		t.Errorf("Expected 1 entity in H3 cell %d, got %d", h3e1, len(snap.layers[indexingResolution][h3e1]))
 	}
 	found := false
-	for _, internalID := range idx.layers[indexingResolution][h3e1] {
+	for _, internalID := range snap.layers[indexingResolution][h3e1] {
 		if idx.idToEntityID[internalID] == e1Updated.ID {
 			found = true
 			break
@@ -438,8 +448,9 @@ func TestIndex_CGO_BoundaryInvariants(t *testing.T) {
 			}
 			if tt.name == "Case C: Massive Batch" {
 				// Check that all 5000 entities were indexed
-				if len(idx.entities) != 5000 {
-					t.Errorf("Expected 5000 entities, got %d", len(idx.entities))
+				snap := idx.snapshot.Load()
+				if len(snap.entities) != 5000 {
+					t.Errorf("Expected 5000 entities, got %d", len(snap.entities))
 				}
 			}
 		})
