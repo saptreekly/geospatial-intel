@@ -43,3 +43,7 @@ performance_logs.md
 # Local env
 .env
 .env.local
+mem.pprof
+.gitignore
+mem_new.pprof
+.gitignore

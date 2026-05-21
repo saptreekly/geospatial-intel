@@ -31,10 +31,10 @@ import (
 var targetResolutions = []int{2, 3, 4, 6, 7}
 
 var (
-	visiblePool = sync.Pool{New: func() interface{} { return make([]entity.Entity, 0, 1024) }}
-	clusterCountsPool = sync.Pool{New: func() interface{} { return make(map[h3.Cell]int, 1024) }}
+	visiblePool           = sync.Pool{New: func() interface{} { return make([]entity.Entity, 0, 1024) }}
+	clusterCountsPool     = sync.Pool{New: func() interface{} { return make(map[h3.Cell]int, 1024) }}
 	processedEntitiesPool = sync.Pool{New: func() interface{} { return make(map[string]struct{}, 1024) }}
-	viewportCellSetPool = sync.Pool{New: func() interface{} { return make(map[h3.Cell]struct{}, 1024) }}
+	viewportCellSetPool   = sync.Pool{New: func() interface{} { return make(map[h3.Cell]struct{}, 1024) }}
 )
 
 type Index struct {
@@ -43,18 +43,19 @@ type Index struct {
 	layers            map[int]map[h3.Cell][]uint32
 	globalCellCounts  map[int]map[h3.Cell]int
 	totalGlobalCounts map[int]int
-	
-	idCounter           uint32
-	entityIDToInternalID map[string]uint32
-	idToEntityID        map[uint32]string
 
-	latsBuf           []float64
-	lngsBuf           []float64
-	r2Buf             []uint64
-	r3Buf             []uint64
-	r4Buf             []uint64
-	r6Buf             []uint64
-	r7Buf             []uint64
+	idCounter            uint32
+	entityIDToInternalID map[string]uint32
+	idToEntityID         map[uint32]string
+	entityCells          map[uint32][5]h3.Cell
+
+	latsBuf []float64
+	lngsBuf []float64
+	r2Buf   []uint64
+	r3Buf   []uint64
+	r4Buf   []uint64
+	r6Buf   []uint64
+	r7Buf   []uint64
 }
 
 func NewIndex() *Index {
@@ -71,17 +72,18 @@ func NewIndex() *Index {
 		layers:            layers,
 		globalCellCounts:  globalCellCounts,
 		totalGlobalCounts: totalGlobalCounts,
-		
-		entityIDToInternalID: make(map[string]uint32),
-		idToEntityID:        make(map[uint32]string),
 
-		latsBuf:           make([]float64, 0),
-		lngsBuf:           make([]float64, 0),
-		r2Buf:             make([]uint64, 0),
-		r3Buf:             make([]uint64, 0),
-		r4Buf:             make([]uint64, 0),
-		r6Buf:             make([]uint64, 0),
-		r7Buf:             make([]uint64, 0),
+		entityIDToInternalID: make(map[string]uint32),
+		idToEntityID:         make(map[uint32]string),
+		entityCells:          make(map[uint32][5]h3.Cell),
+
+		latsBuf: make([]float64, 0),
+		lngsBuf: make([]float64, 0),
+		r2Buf:   make([]uint64, 0),
+		r3Buf:   make([]uint64, 0),
+		r4Buf:   make([]uint64, 0),
+		r6Buf:   make([]uint64, 0),
+		r7Buf:   make([]uint64, 0),
 	}
 }
 
@@ -113,11 +115,10 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 	var removalJobs []precomputedRemoval
 	if len(removed) > 0 {
 		for _, id := range removed {
-			if oldEntity, ok := idx.entities[id]; ok {
-				latLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
-				for _, res := range targetResolutions {
-					if cell, err := h3.LatLngToCell(latLng, res); err == nil {
-						removalJobs = append(removalJobs, precomputedRemoval{res: res, cell: cell})
+			if internalID, ok := idx.entityIDToInternalID[id]; ok {
+				if cells, ok := idx.entityCells[internalID]; ok {
+					for j, res := range targetResolutions {
+						removalJobs = append(removalJobs, precomputedRemoval{res: res, cell: cells[j]})
 					}
 				}
 			}
@@ -166,7 +167,9 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 		ids := idx.layers[job.res][job.cell]
 		for _, id := range removed {
 			internalID, ok := idx.entityIDToInternalID[id]
-			if !ok { continue }
+			if !ok {
+				continue
+			}
 			for i, existingID := range ids {
 				if existingID == internalID {
 					lastIdx := len(ids) - 1
@@ -185,23 +188,25 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 		}
 	}
 	for _, id := range removed {
+		if internalID, ok := idx.entityIDToInternalID[id]; ok {
+			delete(idx.entityCells, internalID)
+		}
 		delete(idx.entities, id)
 		delete(idx.entityIDToInternalID, id)
-		// Note: We don't delete from idToEntityID here to avoid potential issues if re-inserted
 	}
 
 	// Exec Insertions / Updates
 	for i, e := range entities {
-		oldEntity, exists := idx.entities[e.ID]
+		_, exists := idx.entities[e.ID]
 		newCells := [5]h3.Cell{h3.Cell(idx.r2Buf[i]), h3.Cell(idx.r3Buf[i]), h3.Cell(idx.r4Buf[i]), h3.Cell(idx.r6Buf[i]), h3.Cell(idx.r7Buf[i])}
 		internalID := idx.getInternalID(e.ID)
 
 		if exists {
-			oldLatLng := h3.LatLng{Lat: oldEntity.Lat, Lng: oldEntity.Lng}
+			oldCells := idx.entityCells[internalID]
 			for j, res := range targetResolutions {
-				oldCell, oldErr := h3.LatLngToCell(oldLatLng, res)
+				oldCell := oldCells[j]
 				newCell := newCells[j]
-				if oldErr != nil || newCell == 0 {
+				if newCell == 0 {
 					continue
 				}
 
@@ -241,6 +246,7 @@ func (idx *Index) BatchUpdateRust(entities []entity.Entity, removed []string) {
 				idx.totalGlobalCounts[res]++
 			}
 		}
+		idx.entityCells[internalID] = newCells
 		idx.entities[e.ID] = e
 	}
 }
@@ -250,7 +256,7 @@ func (idx *Index) Query(vp entity.Viewport) ([]entity.Entity, map[string]entity.
 	defer util.LogIfSlow(start, 10*time.Millisecond, "Query")
 
 	queryResolution := ZoomToResolution(vp.Zoom)
-	
+
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
@@ -265,13 +271,19 @@ func (idx *Index) Query(vp entity.Viewport) ([]entity.Entity, map[string]entity.
 		visible = visible[:0]
 		visiblePool.Put(visible)
 
-		for k := range clusterCounts { delete(clusterCounts, k) }
+		for k := range clusterCounts {
+			delete(clusterCounts, k)
+		}
 		clusterCountsPool.Put(clusterCounts)
 
-		for k := range processedEntities { delete(processedEntities, k) }
+		for k := range processedEntities {
+			delete(processedEntities, k)
+		}
 		processedEntitiesPool.Put(processedEntities)
 
-		for k := range viewportCellSet { delete(viewportCellSet, k) }
+		for k := range viewportCellSet {
+			delete(viewportCellSet, k)
+		}
 		viewportCellSetPool.Put(viewportCellSet)
 	}()
 
